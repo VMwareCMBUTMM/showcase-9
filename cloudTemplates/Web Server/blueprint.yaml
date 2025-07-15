@@ -6,7 +6,8 @@ inputs:
   web_vm_name:
     type: string
     title: Apache Virtual Machine Name
-    description: ' Enter a name for the Web Virtual Machine'
+    description: Enter a name for the Web Virtual Machine
+    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
   vm_size:
     type: string
     title: Virtual Machine Size

@@ -1,0 +1,129 @@
+formatVersion: 1
+name: Microsoft Windows Server
+description: Choose a Microsoft Windows Server version to deploy
+version: 1
+inputs:
+  namespace:
+    type: string
+    title: Target Namespace
+    description: Select the target Namespace
+    oneOf:
+      - title: production
+        const: production-v26b4
+  vm_name:
+    type: string
+    title: Virtual Machine Name
+    description: Enter a name for the Virtual Machine
+    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+  os_version:
+    type: string
+    title: Virtual Machine Size
+    description: Select a Windows Version
+    default: vmi-63bb2d7d665b57960
+    oneOf:
+      - title: Windows 2019
+        const: vmi-941999be7201d1644
+      - title: Windows 2022
+        const: vmi-63bb2d7d665b57960
+  vm_size:
+    type: string
+    title: Virtual Machine Size
+    description: Select a Virtual Machine Size
+    default: best-effort-medium
+    oneOf:
+      - title: xSmall (2 vCPUs - 2 GiB MEM)
+        const: best-effort-xsmall
+      - title: Small (2 vCPUs - 4 GiB MEM)
+        const: best-effort-small
+      - title: Medium (2 vCPUs - 8 GiB MEM)
+        const: best-effort-medium
+      - title: Large (4 vCPUs - 16 GiB MEM)
+        const: best-effort-large
+  username:
+    type: string
+    description: The username you would like to have for the admin account.
+    default: demouser
+    title: Admin Username
+  password:
+    type: string
+    description: The password you would like to use for the admin account.
+    title: Admin Password
+    default: VMware1!
+    pattern: '[a-z0-9A-Z@#$]+'
+    encrypted: true
+resources:
+  Namespace:
+    type: CCI.Supervisor.Namespace
+    properties:
+      name: ${input.namespace}
+      existing: true
+  RDP_LB:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: vmoperator.vmware.com/v1alpha3
+        kind: VirtualMachineService
+        metadata:
+          name: ${input.vm_name}
+        spec:
+          selector:
+            vm-lb-selector: ${input.vm_name}
+          type: LoadBalancer
+          ports:
+            - name: rdp
+              protocol: TCP
+              port: 3389
+              targetPort: 3389
+  VM:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - BOOTSTRAP
+      - RDP_LB
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: vmoperator.vmware.com/v1alpha3
+        kind: VirtualMachine
+        metadata:
+          name: ${input.vm_name}
+          labels:
+            vm-selector: ${input.vm_name}
+            vm-lb-selector: ${input.vm_name}
+        spec:
+          className: ${input.vm_size}
+          imageName: ${input.os_version}
+          storageClass: cluster-mgmt-01a-vsan-storage-policy
+          powerState: PoweredOn
+          network:
+            #domainName: showcase.tmm.broadcom.lab
+            nameservers:
+              - 10.138.241.1
+              - 10.138.241.2
+            searchDomains:
+              - showcase.tmm.broadcom.lab
+          bootstrap:
+            sysprep:
+              sysprep:
+                guiUnattended:
+                  password:
+                    name: ${input.vm_name}-bootstrap-secret
+                    key: password
+                userData:
+                  fullName: Demo User
+                  orgName: Broadcom
+                identification:
+                  joinWorkgroup: demolab
+  BOOTSTRAP:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${input.vm_name}-bootstrap-secret
+          labels:
+            vm-selector: ${input.vm_name}
+        stringData:
+          password: VMware1!

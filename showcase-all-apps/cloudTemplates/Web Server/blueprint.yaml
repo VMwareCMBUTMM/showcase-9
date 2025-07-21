@@ -86,7 +86,7 @@ resources:
         spec:
           className: ${input.vm_size}
           #Friendly image name: ubuntu-server-18.04-lts-bionic-beaver
-          imageName: vmi-3b7b86a17aca6266b
+          imageName: vmi-7eb4f6375da7f7198
           storageClass: cluster-mgmt-01a-vsan-storage-policy
           powerState: PoweredOn
           network:

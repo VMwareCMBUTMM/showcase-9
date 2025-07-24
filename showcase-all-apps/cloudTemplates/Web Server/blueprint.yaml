@@ -123,6 +123,7 @@ resources:
 
             packages:
               - apache2
+              - unzip
               - open-vm-tools
 
             ssh_pwauth: true
@@ -156,7 +157,7 @@ resources:
               - wget --no-check-certificate https://10.138.242.69/downloads/salt/telegraf-utils.sh
               - chmod 755 telegraf-utils.sh
               #Install the agent
-              - ./telegraf-utils.sh product-managed -c 10.138.242.69 -t 37e94bc0-af7e-44eb-96f6-11fc27986339::f05da917-de41-4a89-857a-f58ac615b980 -v 10.138.242.65 -k 1
+              - ./telegraf-utils.sh product-managed -c 10.138.242.69 -t 37e94bc0-af7e-44eb-96f6-11fc27986339::b505175a-ce22-4b82-a3b0-e830997dfd2d -v 10.138.242.65 -k 1
               #--------------------------------------------------------------------------#
               #------------------------- Install Logs Agent  ----------------------------#
               # download helper script

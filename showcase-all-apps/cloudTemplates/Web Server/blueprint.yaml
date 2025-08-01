@@ -1,7 +1,7 @@
 formatVersion: 1
 name: Web Servers
 description: Showcase Web server
-version: 6
+version: 7
 inputs:
   web_vm_name:
     type: string
@@ -21,13 +21,6 @@ inputs:
         const: best-effort-medium
       - title: Large (4 vCPUs - 16 GiB MEM)
         const: best-effort-large
-  namespace:
-    type: string
-    title: Target Namespace
-    description: Select the target Namespace
-    oneOf:
-      - title: development
-        const: development-sw9wd
   username:
     type: string
     description: The username you would like to have for the admin account.
@@ -44,7 +37,7 @@ resources:
   Namespace:
     type: CCI.Supervisor.Namespace
     properties:
-      name: ${input.namespace}
+      name: ${env.projectName == "default-project" ? propgroup.namespace.development :propgroup.namespace.production}
       existing: true
   SSH_HTTP_LB:
     type: CCI.Supervisor.Resource

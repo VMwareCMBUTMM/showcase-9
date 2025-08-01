@@ -26,8 +26,8 @@ inputs:
     title: Target Namespace
     description: Select the target Namespace
     oneOf:
-      - title: production
-        const: production-zlybp
+      - title: development
+        const: development-sw9wd
   username:
     type: string
     description: The username you would like to have for the admin account.

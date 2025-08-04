@@ -1,7 +1,7 @@
 formatVersion: 1
 name: Microsoft Windows Server
 description: Choose a Microsoft Windows Server version to deploy
-version: 1
+version: 2
 inputs:
   namespace:
     type: string
@@ -22,9 +22,9 @@ inputs:
     default: vmi-63bb2d7d665b57960
     oneOf:
       - title: Windows 2019
-        const: vmi-941999be7201d1644
+        const: vmi-04e7813a63a67a8dd
       - title: Windows 2022
-        const: vmi-63bb2d7d665b57960
+        const: vmi-0bb9bacf190e10474
   vm_size:
     type: string
     title: Virtual Machine Size

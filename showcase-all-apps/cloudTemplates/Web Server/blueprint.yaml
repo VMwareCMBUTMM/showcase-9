@@ -1,26 +1,26 @@
-formatVersion: 1
+formatVersion: 2
 name: Web Servers
 description: Showcase Web server
-version: 7
+version: 8
 inputs:
   web_vm_name:
     type: string
     title: Apache Virtual Machine Name
     description: Enter a name for the Web Virtual Machine
     pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+  namespace:
+    type: string
+    title: Namespace
+    $data: /data/namespaces
+  storageClass:
+    type: string
+    title: Storage Class
+    $data: /data/storageclasses?namespace={{namespace}}
   vm_size:
     type: string
     title: Virtual Machine Size
     description: Select a Virtual Machine Size
-    oneOf:
-      - title: xSmall (2 vCPUs - 2 GiB MEM)
-        const: best-effort-xsmall
-      - title: Small (2 vCPUs - 4 GiB MEM)
-        const: best-effort-small
-      - title: Medium (2 vCPUs - 8 GiB MEM)
-        const: best-effort-medium
-      - title: Large (4 vCPUs - 16 GiB MEM)
-        const: best-effort-large
+    $data: /data/virtualmachineclasses?namespace={{namespace}}
   username:
     type: string
     description: The username you would like to have for the admin account.
@@ -28,7 +28,7 @@ inputs:
     title: Admin Username
   password:
     type: string
-    description: The password you would like to use for the admin account.
+    description: The password you would like to use for the admin account. Default is VMware1!
     title: Admin Password
     default: VMware1!
     pattern: '[a-z0-9A-Z@#$]+'
@@ -37,7 +37,7 @@ resources:
   Namespace:
     type: CCI.Supervisor.Namespace
     properties:
-      name: ${env.projectName == "default-project" ? propgroup.namespace.development :propgroup.namespace.production}
+      name: ${input.namespace}
       existing: true
   SSH_HTTP_LB:
     type: CCI.Supervisor.Resource
@@ -79,16 +79,17 @@ resources:
         spec:
           className: ${input.vm_size}
           #Friendly image name: ubuntu-server-18.04-lts-bionic-beaver
-          imageName: vmi-7eb4f6375da7f7198
-          storageClass: lvn-m01-cl01-vsan-storage-policy
+          imageName: ${propgroup.environment.ubuntu1804}
+          #storageClass: ${propgroup.environment.storagepolicy}
+          storageClass: ${input.storageClass}
           powerState: PoweredOn
           network:
-            domainName: showcase.tmm.broadcom.lab
+            domainName: ${propgroup.environment.domain}
             nameservers:
-              - 10.138.241.1
-              - 10.138.241.2
+              - ${propgroup.environment.nameserver1}
+              - ${propgroup.environment.nameserver2}
             searchDomains:
-              - showcase.tmm.broadcom.lab
+              - ${propgroup.environment.domain}
           bootstrap:
             cloudInit:
               rawCloudConfig:
@@ -139,29 +140,44 @@ resources:
               ### update the top of the web page to the web servers resource name
               - sed -i 's/Apache2 Ubuntu Default Page/Showcase Web Server ${input.web_vm_name}/g' /var/www/html/index.html
               
+              ### Set to show detailed apache metrics with the telegraf agent
+              - sed -i '/Require local/a \\tRequire all granted' /etc/apache2/mods-enabled/status.conf
+              
               ### Restart services
               - systemctl reload apache2
               - systemctl restart apache2
+              
+              - echo 'Apache Installed' >> /tmp/finished.txt
                   
               ### Cloud-init script for agents
-              #----------------------- Install Telegraf Agent  -------------------------#
+              #------------------ Install Telegraf Agent  --------------------#
               # download helper script
-              - cd /tmp
-              - wget --no-check-certificate https://10.138.242.69/downloads/salt/telegraf-utils.sh
-              - chmod 755 telegraf-utils.sh
+              - wget -P /tmp/ --no-check-certificate https://${propgroup.environment.opscollector_01a}/downloads/salt/telegraf-utils.sh
+              - chmod 755 /tmp/telegraf-utils.sh
+              
+              #Get a token
+              #- curl -o /tmp/token.txt -k -H 'Content-Type: application/json' -d '{"username": "svc-ops-auto","authSource": "LOCAL","password": "VMware123"}' 'https://${propgroup.environment.ops_a}/suite-api/api/auth/token/acquire?_no_links=true'
+              # Convert the above curl to base64 to escape special characters in the password
+              - echo "ICMhL2Jpbi9iYXNoCmN1cmwgLW8gL3RtcC90b2tlbi50eHQgLWsgLUggJ0NvbnRlbnQtVHlwZTogYXBwbGljYXRpb24vanNvbicgLWQgJ3sidXNlcm5hbWUiOiAic3ZjLW9wcy1hdXRvIiwiYXV0aFNvdXJjZSI6ICJMT0NBTCIsInBhc3N3b3JkIjogIlZNd2FyZTEyM14ifScgJ2h0dHBzOi8vb3BzLWEudmNmMDIuc2hvd2Nhc2UudG1tLmJyb2FkY29tLmxhYi9zdWl0ZS1hcGkvYXBpL2F1dGgvdG9rZW4vYWNxdWlyZT9fbm9fbGlua3M9dHJ1ZScg" | base64 -d > /tmp/run_curl.sh
+              - chmod +x /tmp/run_curl.sh
+              - /tmp/run_curl.sh
+              - TOKEN=`cat /tmp/token.txt | grep -o '"token":"[^"]*"' | sed 's/"token":"\|"//g'`
+
               #Install the agent
-              - ./telegraf-utils.sh product-managed -c 10.138.242.69 -t 37e94bc0-af7e-44eb-96f6-11fc27986339::b505175a-ce22-4b82-a3b0-e830997dfd2d -v 10.138.242.65 -k 1
-              #--------------------------------------------------------------------------#
-              #------------------------- Install Logs Agent  ----------------------------#
+              - /tmp/telegraf-utils.sh product-managed -c ${propgroup.environment.opscollector_01a} -t $TOKEN -v ${propgroup.environment.ops_a} -k 1
+              - echo 'Telegraf Agent Installed' >> /tmp/finished.txt
+              #----------------------------------------------------------------#
+              #-------------------- Install Logs Agent  -----------------------#
               # download helper script
-              - cd /tmp
-              - wget --quiet http://lvn-sc-www.showcase.tmm.broadcom.lab/downloads/vmware-log-insight-agent_8.14.0-22552671_all.deb
+              - wget -P /tmp/ --quiet http://${propgroup.environment.www}/downloads/vmware-log-insight-agent_8.14.0-22552671_all.deb
+              
               #Install the agent
-              - dpkg -i vmware-log-insight-agent_8.14.0-22552671_all.deb
-              - export logs_ip="opslogs-a.vcf02.showcase.tmm.broadcom.lab"
+              - dpkg -i /tmp/vmware-log-insight-agent_8.14.0-22552671_all.deb
+              - export logs_ip="${propgroup.environment.opslogs_01a}"
               - sed -i "s/;hostname=OPERATIONS_FOR_LOGS/hostname=$logs_ip/g" /var/lib/loginsight-agent/liagent.ini
               - sed -i "0,/;ssl=yes/s/;ssl=yes/ssl_accept_any=yes/" /var/lib/loginsight-agent/liagent.ini
               - systemctl restart liagentd
               - systemctl enable liagentd
-              #-------------------------------------------------------------------------#
+              - echo 'Logs Agent Installed' >> /tmp/finished.txt
+              #----------------------------------------------------------------#
               - echo 'Cloud-init is done!' >> /tmp/finished.txt

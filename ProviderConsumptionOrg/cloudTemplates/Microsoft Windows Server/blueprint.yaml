@@ -1,7 +1,7 @@
 formatVersion: 2
 name: Microsoft Windows Server
 description: Choose a Microsoft Windows Server version to deploy
-version: 3
+version: 4
 inputs:
   vm_name:
     type: string
@@ -11,7 +11,7 @@ inputs:
   os_version:
     type: string
     title: Virtual Machine Size
-    description: Select a Windows Version
+    description: Select a Windows Version to deploy
     default: vmi-0bb9bacf190e10474
     oneOf:
       - title: Windows 2019

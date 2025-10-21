@@ -1,7 +1,7 @@
 formatVersion: 2
 name: Ubuntu Linux Server
 description: Showcase Ubuntu server
-version: 4
+version: 5
 inputs:
   vm_name:
     type: string
@@ -12,16 +12,16 @@ inputs:
     type: string
     title: Virtual Machine Size
     description: Select a Ubuntu Version
-    default: vmi-290e771b30ccfb36a
+    default: vmi-254818e8ba87082b4
     oneOf:
       - title: Ubuntu 18.04
-        const: vmi-3b7b86a17aca6266b
+        const: vmi-7eb4f6375da7f7198
       - title: Ubuntu 20.04
-        const: vmi-ef4ed6760ef315214
+        const: vmi-a2b8f5caa63e7baf0
       - title: Ubuntu 22.04
-        const: vmi-d15db9b1a4335d781
+        const: vmi-3d4355b8ab4c4bdcb
       - title: Ubuntu 24.04
-        const: vmi-290e771b30ccfb36a
+        const: vmi-254818e8ba87082b4
   namespace:
     type: string
     title: Namespace

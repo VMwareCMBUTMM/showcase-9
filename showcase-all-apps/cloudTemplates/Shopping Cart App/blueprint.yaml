@@ -1,7 +1,7 @@
 formatVersion: 2
 name: Opencart VM's
 description: Shopping Cart App with Web and Database servers
-version: 8
+version: 9
 inputs:
   sql_vm_name:
     type: string

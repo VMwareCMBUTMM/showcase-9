@@ -1,15 +1,8 @@
-formatVersion: 1
+formatVersion: 2
 name: Microsoft Windows Server
 description: Choose a Microsoft Windows Server version to deploy
-version: 2
+version: 3
 inputs:
-  namespace:
-    type: string
-    title: Target Namespace
-    description: Select the target Namespace
-    oneOf:
-      - title: production
-        const: production-v26b4
   vm_name:
     type: string
     title: Virtual Machine Name
@@ -19,26 +12,25 @@ inputs:
     type: string
     title: Virtual Machine Size
     description: Select a Windows Version
-    default: vmi-63bb2d7d665b57960
+    default: vmi-0bb9bacf190e10474
     oneOf:
       - title: Windows 2019
         const: vmi-04e7813a63a67a8dd
       - title: Windows 2022
         const: vmi-0bb9bacf190e10474
+  namespace:
+    type: string
+    title: Namespace
+    $data: /data/namespaces
+  storageClass:
+    type: string
+    title: Storage Class
+    $data: /data/storageclasses?namespace={{namespace}}
   vm_size:
     type: string
     title: Virtual Machine Size
     description: Select a Virtual Machine Size
-    default: best-effort-medium
-    oneOf:
-      - title: xSmall (2 vCPUs - 2 GiB MEM)
-        const: best-effort-xsmall
-      - title: Small (2 vCPUs - 4 GiB MEM)
-        const: best-effort-small
-      - title: Medium (2 vCPUs - 8 GiB MEM)
-        const: best-effort-medium
-      - title: Large (4 vCPUs - 16 GiB MEM)
-        const: best-effort-large
+    $data: /data/virtualmachineclasses?namespace={{namespace}}
   username:
     type: string
     description: The username you would like to have for the admin account.
@@ -93,7 +85,7 @@ resources:
         spec:
           className: ${input.vm_size}
           imageName: ${input.os_version}
-          storageClass: cluster-mgmt-01a-vsan-storage-policy
+          storageClass: ${input.storageClass}
           powerState: PoweredOn
           network:
             #domainName: showcase.tmm.broadcom.lab
@@ -126,4 +118,4 @@ resources:
           labels:
             vm-selector: ${input.vm_name}
         stringData:
-          password: VMware1!
+          password: ${input.password}

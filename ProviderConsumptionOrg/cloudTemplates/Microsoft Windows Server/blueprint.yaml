@@ -1,7 +1,7 @@
 formatVersion: 2
 name: Microsoft Windows Server
-description: Choose a Microsoft Windows Server version to deploy
-version: 4
+description: Deploy Windows 2019 or 2022 Server
+version: 5
 inputs:
   vm_name:
     type: string

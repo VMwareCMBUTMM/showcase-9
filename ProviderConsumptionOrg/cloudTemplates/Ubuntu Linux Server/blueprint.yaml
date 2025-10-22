@@ -1,7 +1,7 @@
 formatVersion: 2
 name: Ubuntu Linux Server
-description: Showcase Ubuntu server
-version: 5
+description: Deploy various versions of Ubuntu Server
+version: 6
 inputs:
   vm_name:
     type: string

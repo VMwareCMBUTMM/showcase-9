@@ -1,0 +1,645 @@
+formatVersion: 2
+name: Opencart K8s Application
+description: Provision the Opencart application in a VKS Cluster with a SQL VM
+version: 1
+metadata:
+  deploymentSettings:
+    disableUpdateDay2Action: true
+    hideDisabledDay2Actions: true
+variables:
+  namespaceName: ${input.namespace}
+  httpProxyHost: null
+  httpProxyPort: null
+  httpProxy: ''
+  httpsProxy: ''
+  noProxy: ''
+outputs:
+  __deploymentOverview:
+    value: |-
+      ## Opencart Shopping Cart Application
+
+      Opencart is an easy to-use, powerful, Open Source online store management program that can manage multiple online stores from a single back-en.
+      For more details, check https://www.opencart.com/
+
+      Provisioned to Namespace ${input.namespace}
+inputs:
+  namespace:
+    type: string
+    title: Namespace
+    $data: /data/namespaces
+  storageClass:
+    type: string
+    title: Storage Class
+    $data: /data/storageclasses?namespace={{namespace}}
+  vm_size:
+    type: string
+    title: MySQL Virtual Machine Size
+    description: Select the MySQL Virtual Machine Size
+    $data: /data/virtualmachineclasses?namespace={{namespace}}
+  vks_name:
+    type: string
+    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+    maxLength: 63
+    minLength: 1
+    title: VKS K8s Cluster Name
+    description: ' Enter a name for the VKS K8s Cluster'
+  vm_name:
+    type: string
+    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+    maxLength: 63
+    minLength: 1
+    title: MySQL Virtual Machine Name
+    description: ' Enter a name for the MySQL Virtual Machine'
+  controlPlaneCount:
+    type: integer
+    title: VKS ControlPlane Node count
+    description: Control plane node count
+    default: 1
+    enum:
+      - 1
+      - 3
+  workerCount:
+    type: integer
+    title: VKS Worker Node count
+    description: Worker node count
+    default: 1
+    enum:
+      - 1
+      - 2
+      - 3
+  controlPlaneVmClassName:
+    type: string
+    title: VKS ControlPlane VM class
+    description: VKS Control Plane Virtual Machine Class Name
+    $data: /data/virtualmachineclasses?namespace={{namespace}}
+  workerVmClassName:
+    type: string
+    title: VKS Worker VM class
+    description: Worker Virtual Machine Class Name
+    $data: /data/virtualmachineclasses?namespace={{namespace}}
+resources:
+  cciNamespace:
+    type: CCI.Supervisor.Namespace
+    properties:
+      name: ${variable.namespaceName}
+      existing: true
+  CLUSTER:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.cciNamespace.id}
+      wait:
+        conditions:
+          - type: Ready
+            status: 'True'
+          - type: ControlPlaneInitialized
+            status: 'True'
+          - type: TopologyReconciled
+            status: 'True'
+        fields:
+          - indicatesFailure: false
+            path: status.phase
+            value: Provisioned
+          - indicatesFailure: false
+            path: status.controlPlaneReady
+            value: 'true'
+          - indicatesFailure: false
+            path: status.infrastructureReady
+            value: 'true'
+      manifest:
+        kind: Cluster
+        apiVersion: cluster.x-k8s.io/v1beta1
+        metadata:
+          name: ${to_lower(input.vks_name)}
+          labels:
+            tkg-cluster-selector: ${to_lower(input.vks_name)}
+        spec:
+          clusterNetwork:
+            services:
+              cidrBlocks:
+                - 198.51.100.0/12
+            pods:
+              cidrBlocks:
+                - 192.0.2.0/16
+            serviceDomain: cluster.local
+          topology:
+            class: tanzukubernetescluster
+            version: v1.32.0---vmware.6-fips-vkr.2
+            variables:
+              - name: vmClass
+                value: ${input.controlPlaneVmClassName}
+              - name: storageClass
+                value: ${input.storageClass}
+              - name: defaultStorageClass
+                value: ${input.storageClass}
+              - name: nodePoolLabels
+                value: []
+              - name: nodePoolTaints
+                value: []
+              - name: proxy
+                value:
+                  httpProxy: ${variable.httpProxy}
+                  httpsProxy: ${variable.httpsProxy}
+                  noProxy: ${split(variable.noProxy, ',')}
+            controlPlane:
+              metadata:
+                annotations:
+                  run.tanzu.vmware.com/resolve-os-image: os-name=ubuntu
+              replicas: ${input.controlPlaneCount}
+            workers:
+              machineDeployments:
+                - class: node-pool
+                  metadata:
+                    annotations:
+                      run.tanzu.vmware.com/resolve-os-image: os-name=ubuntu
+                  name: worker
+                  replicas: ${input.workerCount}
+                  variables:
+                    overrides:
+                      - name: vmClass
+                        value: ${input.workerVmClassName}
+  SSH_MYSQL_LB:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.cciNamespace.id}
+      manifest:
+        apiVersion: vmoperator.vmware.com/v1alpha3
+        kind: VirtualMachineService
+        metadata:
+          name: ${to_lower(input.vm_name)}
+        spec:
+          selector:
+            vm-lb-selector: ${to_lower(input.vm_name)}
+          type: LoadBalancer
+          ports:
+            - name: ssh
+              protocol: TCP
+              port: 22
+              targetPort: 22
+            - name: mysql
+              protocol: TCP
+              port: 3306
+              targetPort: 3306
+  VKS_Bootstrap:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - CLUSTER
+    createTimeout: 45m
+    properties:
+      context: ${resource.cciNamespace.id}
+      existing: true
+      manifest:
+        apiVersion: run.tanzu.vmware.com/v1alpha3
+        kind: ClusterBootstrap
+        metadata:
+          name: ${to_lower(input.vks_name)}
+      wait:
+        conditions:
+          - indicatesFailure: false
+            status: 'True'
+            type: Antrea-ReconcileSucceeded
+          - indicatesFailure: false
+            status: 'True'
+            type: Guest-Cluster-Auth-Service-ReconcileSucceeded
+          - indicatesFailure: false
+            status: 'True'
+            type: Kapp-Controller-ReconcileSucceeded
+          - indicatesFailure: false
+            status: 'True'
+            type: Metrics-Server-ReconcileSucceeded
+          - indicatesFailure: false
+            status: 'True'
+            type: Pinniped-ReconcileSucceeded
+          - indicatesFailure: false
+            status: 'True'
+            type: Secretgen-Controller-ReconcileSucceeded
+          - indicatesFailure: false
+            status: 'True'
+            type: Vsphere-Cpi-ReconcileSucceeded
+          - indicatesFailure: false
+            type: Vsphere-Pv-Csi-ReconcileSucceeded
+            status: 'True'
+  MYSQL_VM:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - BOOTSTRAP
+      - SSH_MYSQL_LB
+    properties:
+      context: ${resource.cciNamespace.id}
+      manifest:
+        apiVersion: vmoperator.vmware.com/v1alpha3
+        kind: VirtualMachine
+        metadata:
+          name: ${to_lower(input.vm_name)}
+          labels:
+            vm-selector: ${to_lower(input.vm_name)}
+            vm-lb-selector: ${to_lower(input.vm_name)}
+        spec:
+          className: ${input.vm_size}
+          # Friendly image name: ubuntu-server-18.04-lts-bionic-beaver
+          imageName: ${propgroup.environment.ubuntu1804}
+          storageClass: ${input.storageClass}
+          powerState: PoweredOn
+          network:
+            domainName: ${propgroup.environment.domain}
+            nameservers:
+              - ${propgroup.environment.nameserver1}
+              - ${propgroup.environment.nameserver2}
+            searchDomains:
+              - ${propgroup.environment.domain}
+          bootstrap:
+            cloudInit:
+              rawCloudConfig:
+                name: ${to_lower(input.vm_name)}-bootstrap-secret
+  VKS_Job:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - VKS_Bootstrap
+    createTimeout: 120m
+    properties:
+      context: ${resource.cciNamespace.id}
+      manifest:
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          name: vks-job-${env.shortDeploymentId}
+        spec:
+          completions: 1
+          parallelism: 1
+          ttlSecondsAfterFinished: 600
+          backoffLimit: 0
+          template:
+            spec:
+              containers:
+                - name: vks-job
+                  image: paif.packages.broadcom.com/tkg-gpu-console:9.0.0.0
+                  volumeMounts:
+                    - name: cluster-kubeconfig-volume
+                      mountPath: /etc/vks-kubeconfig
+                      readOnly: true
+                  command:
+                    - /bin/bash
+                    - '-c'
+                  args:
+                    - |
+
+                      # Function to set KUBECONFIG to VKS KubeConfig
+                      set_vks_kubeconfig() {
+                        export KUBECONFIG=/etc/vks-kubeconfig/vks-cluster-kubeconfig-admin
+                        if [ $? -ne 0 ]; then
+                          echo "Failure: Failed to retrieve get VKS Kubeconfig"
+                          exit 1
+                        else 
+                        echo "Success: VKS Kubeconfig is retrieved"
+                        fi
+                      }
+
+                      # Call the set_vks_kubeconfig() function
+                      set_vks_kubeconfig
+
+                      # create and patch the opencart namespace pod-security inside VKS cluster
+                      #=======================================
+                      create_namespace() {
+                        kubectl create namespace opencart
+                        if [ $? -ne 0 ]; then
+                          echo "Failure: Failed to create the 'opencart' namespace"
+                          exit 1
+                        else
+                          echo "Success: 'opencart' namespace created"
+                        fi
+                      }
+
+                      # Call the create_namespace() function
+                      create_namespace
+
+                      #Patch the namespace with a pod-security privileged label
+                      #=======================================
+                      kubectl label ns opencart pod-security.kubernetes.io/enforce=privileged
+
+                      #Create a WEB Loadbalancer that allows HTTP and HTTPs within the opencart namespace on the vks cluster 
+                      #=======================================
+                      cat <<EOF | kubectl create -f -
+                      apiVersion: v1
+                      kind: Service
+                      metadata:
+                        labels:
+                          app.kubernetes.io/instance: my-open-cart
+                          app.kubernetes.io/name: opencart
+                        name: my-open-cart-lb
+                        namespace: opencart
+                      spec:
+                        ports:
+                          - name: http
+                            port: 80
+                            protocol: TCP
+                            targetPort: http
+                          - name: https
+                            port: 443
+                            protocol: TCP
+                            targetPort: https
+                        selector:
+                          app.kubernetes.io/instance: my-open-cart
+                          app.kubernetes.io/name: opencart
+                        type: LoadBalancer
+                      EOF
+
+                      #sleep for 60 seconds until an External IP is generated
+                      #=======================================
+                      sleep 120
+
+                      #Store the External IP to a variable for later use in the Frontend K8s deployment
+                      #=======================================
+                      ext_ip=$(kubectl get svc -n opencart my-open-cart-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+
+                      #Create secret for pulling imaging from vcf-automation-docker-dev-local.usw5.packages.broadcom.com
+                      #=======================================
+                      cat <<EOF | kubectl apply -f -
+                      apiVersion: v1
+                      data:
+                        .dockerconfigjson: eyJhdXRocyI6eyJ2Y2YtYXV0b21hdGlvbi1kb2NrZXItZGV2LWxvY2FsLnVzdzUucGFja2FnZXMuYnJvYWRjb20uY29tIjp7InVzZXJuYW1lIjoibWEwMDA4MzEiLCJwYXNzd29yZCI6ImNtVm1kR3R1T2pBeE9qRTNPRFl3TVRjek9UWTZiRmx0WWtVeFpXTlVaWFEzTW1sR2JXMXNhMnhyTUhKRFNqSnQiLCJhdXRoIjoiYldFd01EQTRNekU2WTIxV2JXUkhkSFZQYWtGNFQycEZNMDlFV1hkTlZHTjZUMVJaTm1KR2JIUlphMVY0V2xkT1ZWcFlVVE5OYld4SFlsY3hjMkV5ZUhKTlNFcEVVMnBLZEE9PSJ9fX0=
+                      kind: Secret
+                      metadata:
+                        name: regcred
+                        namespace: opencart
+                      type: kubernetes.io/dockerconfigjson
+                      EOF
+
+                      #Create PVC for the Opencart App
+                      #=======================================
+                      cat <<EOF | kubectl create -f -
+                      apiVersion: v1
+                      kind: PersistentVolumeClaim
+                      metadata:
+                        labels:
+                          app.kubernetes.io/instance: my-open-cart
+                          app.kubernetes.io/name: opencart
+                        name: open-cart-pvc
+                        namespace: opencart
+                      spec:
+                        accessModes:
+                          - ReadWriteOnce
+                        resources:
+                          requests:
+                            storage: 8Gi
+                        storageClassName: ${input.storageClass}
+                      EOF
+
+                      #Create Opencart Password
+                      #=======================================
+                      cat <<EOF | kubectl create -f -
+                      apiVersion: v1
+                      data:
+                        opencart-password: Vk13YXJlMSE=
+                      kind: Secret
+                      metadata:
+                        labels:
+                          app.kubernetes.io/instance: my-open-cart
+                          app.kubernetes.io/name: opencart
+                        name: open-cart-oc-password
+                        namespace: opencart
+                      type: Opaque
+                      EOF
+
+                      #Create MariaDB Password
+                      #=======================================
+                      cat <<EOF | kubectl create -f -
+                      apiVersion: v1
+                      data:
+                        mariadb-password: Vk13YXJlMSE=
+                      kind: Secret
+                      metadata:
+                        labels:
+                          app.kubernetes.io/instance: my-open-cart
+                          app.kubernetes.io/name: opencart
+                        name: my-open-externaldb
+                        namespace: opencart
+                      type: Opaque
+                      EOF
+
+                      #Create Frontend Web Deployment
+                      #=======================================
+                      cat <<EOF | kubectl create -f -
+                      apiVersion: apps/v1
+                      kind: Deployment
+                      metadata:
+                        generation: 1
+                        labels:
+                          app.kubernetes.io/instance: my-open-cart
+                          app.kubernetes.io/name: opencart
+                        name: my-open-cart-app
+                        namespace: opencart
+                      spec:
+                        progressDeadlineSeconds: 600
+                        replicas: 1
+                        revisionHistoryLimit: 10
+                        selector:
+                          matchLabels:
+                            app.kubernetes.io/instance: my-open-cart
+                            app.kubernetes.io/name: opencart
+                        strategy:
+                          rollingUpdate:
+                            maxSurge: 25%
+                            maxUnavailable: 25%
+                          type: RollingUpdate
+                        template:
+                          metadata:
+                            labels:
+                              app.kubernetes.io/instance: my-open-cart
+                              app.kubernetes.io/name: opencart
+                          spec:
+                            imagePullSecrets:
+                            - name: regcred
+                            affinity:
+                              podAntiAffinity:
+                                preferredDuringSchedulingIgnoredDuringExecution:
+                                  - podAffinityTerm:
+                                      labelSelector:
+                                        matchLabels:
+                                          app.kubernetes.io/instance: my-open-cart
+                                          app.kubernetes.io/name: opencart
+                                      topologyKey: kubernetes.io/hostname
+                                    weight: 1
+                            containers:
+                              - env:
+                                  - name: BITNAMI_DEBUG
+                                    value: 'false'
+                                  - name: ALLOW_EMPTY_PASSWORD
+                                    value: to_string(yes)
+                                  - name: APACHE_HTTP_PORT_NUMBER
+                                    value: '8080'
+                                  - name: APACHE_HTTPS_PORT_NUMBER
+                                    value: '8443'
+                                  - name: OPENCART_DATABASE_HOST
+                                    value: '${resource.SSH_MYSQL_LB.object.status.loadBalancer.ingress[0].ip}'
+                                  - name: OPENCART_DATABASE_PORT_NUMBER
+                                    value: '3306'
+                                  - name: OPENCART_DATABASE_NAME
+                                    value: opencart
+                                  - name: OPENCART_DATABASE_USER
+                                    value: ocuser
+                                  - name: OPENCART_DATABASE_PASSWORD
+                                    valueFrom:
+                                      secretKeyRef:
+                                        key: mariadb-password
+                                        name: my-open-externaldb
+                                  - name: OPENCART_SKIP_BOOTSTRAP
+                                    value: to_string(no)
+                                  - name: OPENCART_HOST
+                                    value: '$ext_ip'
+                                  - name: OPENCART_USERNAME
+                                    value: user
+                                  - name: OPENCART_PASSWORD
+                                    valueFrom:
+                                      secretKeyRef:
+                                        key: opencart-password
+                                        name: open-cart-oc-password
+                                  - name: OPENCART_EMAIL
+                                    value: user@example.com
+                                image: vcf-automation-docker-dev-local.usw5.packages.broadcom.com/bitnami/opencart:4.0.1-1-debian-11-r66
+                                imagePullPolicy: IfNotPresent
+                                livenessProbe:
+                                  failureThreshold: 6
+                                  httpGet:
+                                    httpHeaders:
+                                      - name: Host
+                                        value: '$ext_ip'
+                                    path: /administration/
+                                    port: http
+                                    scheme: HTTP
+                                  initialDelaySeconds: 120
+                                  periodSeconds: 10
+                                  successThreshold: 1
+                                  timeoutSeconds: 5
+                                name: my-open-cart-app
+                                ports:
+                                  - containerPort: 8080
+                                    name: http
+                                    protocol: TCP
+                                  - containerPort: 8443
+                                    name: https
+                                    protocol: TCP
+                                readinessProbe:
+                                  failureThreshold: 6
+                                  httpGet:
+                                    httpHeaders:
+                                      - name: Host
+                                        value: '$ext_ip'
+                                    path: /administration/
+                                    port: http
+                                    scheme: HTTP
+                                  initialDelaySeconds: 30
+                                  periodSeconds: 5
+                                  successThreshold: 1
+                                  timeoutSeconds: 3
+                                resources:
+                                  requests:
+                                    cpu: 300m
+                                    memory: 512Mi
+                                securityContext:
+                                  runAsNonRoot: true
+                                  runAsUser: 1001
+                                terminationMessagePath: /dev/termination-log
+                                terminationMessagePolicy: File
+                                volumeMounts:
+                                  - mountPath: /bitnami/opencart
+                                    name: opencart-data
+                                    subPath: opencart
+                                  - mountPath: /bitnami/opencart_storage
+                                    name: opencart-data
+                                    subPath: opencart_storage
+                            dnsPolicy: ClusterFirst
+                            hostAliases:
+                              - hostnames:
+                                  - status.localhost
+                                ip: 127.0.0.1
+                            restartPolicy: Always
+                            schedulerName: default-scheduler
+                            securityContext:
+                              fsGroup: 1001
+                            terminationGracePeriodSeconds: 30
+                            volumes:
+                              - name: opencart-data
+                                persistentVolumeClaim:
+                                  claimName: open-cart-pvc
+                      EOF
+              restartPolicy: Never
+              volumes:
+                - name: cluster-kubeconfig-volume
+                  secret:
+                    secretName: ${to_lower(input.vks_name)}-kubeconfig
+                    items:
+                      - key: value
+                        path: vks-cluster-kubeconfig-admin
+      wait:
+        conditions:
+          - indicatesFailure: false
+            status: 'True'
+            type: Complete
+        fields:
+          - indicatesFailure: true
+            path: status.failed
+            value: '1'
+  BOOTSTRAP:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.cciNamespace.id}
+      manifest:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${to_lower(input.vm_name)}-bootstrap-secret
+          labels:
+            vm-selector: ${to_lower(input.vm_name)}
+        stringData:
+          user-data: |
+            #cloud-config
+            repo_update: true
+            repo_upgrade: all
+            apt_source:
+              - source: deb http://archive.ubuntu.com/ubuntu main universe multiverse restricted
+            packages:
+              - mysql-server-5.7
+              - mysql-client
+              - unzip
+              - open-vm-tools
+            users:
+              - name: demouser
+                sudo: ['ALL=(ALL) NOPASSWD:ALL']
+                groups: sudo
+                shell: /bin/bash
+                lock_passwd: false
+                passwd: "$6$XlPaQkGtoUOWqfKz$Jb3uBcfTpIIskc3oFGZYwyaqRCDp..Q7EGvAkEAlb5hv.la5MCaBd1OxjOJJstEE78LoXsR2QByXsfCmXFNZ11"
+                ssh_authorized_keys:
+                  - ssh-rsa AAAAB3NzaC1yc2EAAAABJQAAAQEAyCdobTWPsYBjDRTcUYO/6LF8wwkVAlU8Jm1KcB9FV+qbjmazGH0JV156LnwerqU59ehc9CSSCFRciSyq/04lHoD3erXqzloBEBxnynq7aWHVotB39ODRSTvjqraGh2+MfIeatTeAtRB7k6LLhcT9ADdAMQIR236W9iHxAX9rJVHwtdtDQNckdFSSdlgnH1FcZvlsAPelmBe/tNYVm091/vJZEqfKR80QKDc7Dmah7NJImWPuQXtsPAecOX/iEMVJJDeHnAI1zyJ7Mvqfph3Tp5qIcLgQ/UadSt18dHUyXaYuOXDzbVJX3/EBkV+FAymjklbTFVz965niGyaEw1aW+Q== rsa-key-20220728
+              - name: ocuser
+                sudo: ['ALL=(ALL) NOPASSWD:ALL']
+                groups: sudo
+                shell: /bin/bash
+            write_files:
+              - path: /etc/cron.hourly/oc_cleanup
+                owner: root
+                permissions: '0777'
+                content: "mysql -e 'use opencart; create table oc_session_copy like oc_session; drop table oc_session; rename table oc_session_copy to oc_session;'"
+              - path: /etc/hosts
+                content: 127.0.0.1 ${to_lower(input.vm_name)}
+                append: true
+            runcmd:
+              - export DEBIAN_FRONTEND=noninteractive
+              - USER=ocuser
+              - PASS=VMware1!
+              - hostnamectl set-hostname ${to_lower(input.vm_name)}
+              - echo "mysql-server-5.7 mysql-server/root_password password root" | sudo debconf-set-selections
+              - echo "mysql-server-5.7 mysql-server/root_password_again password root" | sudo debconf-set-selections
+              - echo "[client]" >> /etc/mysql/mysql.conf.d/mysqld.cnf
+              - echo "user=root" >> /etc/mysql/mysql.conf.d/mysqld.cnf
+              - echo "password=root" >> /etc/mysql/mysql.conf.d/mysqld.cnf
+              - echo "user=ocuser" >> /etc/mysql/mysql.conf.d/mysqld.cnf
+              - echo "password=$PASS" >> /etc/mysql/mysql.conf.d/mysqld.cnf
+              - sed -i 's/#slow/slow/g' /etc/mysql/mysql.conf.d/mysqld.cnf
+              - sed -i 's/#long_query_time/long_query_time/g' /etc/mysql/mysql.conf.d/mysqld.cnf
+              - sed -i 's/bind-address/#bind-address/g' /etc/mysql/mysql.conf.d/mysqld.cnf
+              - systemctl restart mysql
+              - mysql -u root -e "GRANT ALL ON *.* TO '$USER'@'%' IDENTIFIED BY '$PASS'"
+              - mysql -u root -e 'CREATE DATABASE opencart'
+              - mysql -u root -e 'USE opencart'
+              - mysql -u root -e 'flush privileges'
+              - echo 'Cloud-init is done!' >> /tmp/finished.txt

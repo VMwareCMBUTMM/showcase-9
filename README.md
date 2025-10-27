@@ -1,4 +1,4 @@
-# Field Showcase 9 Environment templates and scripts
+# Field Showcase 9 Environment content
 
 This repository section, located at `showcase-9`, contains a collection of repositorys for use within VMware Cloud Foundation Automation.
 

@@ -124,6 +124,7 @@ resources:
 
             packages:
               - open-vm-tools
+              - unzip
 
             ssh_pwauth: true
 
@@ -145,7 +146,8 @@ resources:
               ### Cloud-init script for agents
               #----------------------- Install Telegraf Agent  -------------------------#
               # download helper script
-              - wget -P /tmp/ --no-check-certificate https://10.138.242.22/downloads/salt/telegraf-utils.sh
+              #- wget -P /tmp/ --no-check-certificate https://10.138.242.22/downloads/salt/telegraf-utils.sh
+              - wget -P /tmp/ --no-check-certificate https://opscollector-01a.site-a.vcf.lab/downloads/salt/telegraf-utils.sh
               - chmod 755 /tmp/telegraf-utils.sh
               
               #Get a token
@@ -157,16 +159,16 @@ resources:
               - TOKEN=`cat /tmp/token.txt | grep -o '"token":"[^"]*"' | sed 's/"token":"\|"//g'`
               
               #Install the agent
-              - /tmp/telegraf-utils.sh product-managed -c 10.138.242.22 -t $TOKEN -v 10.138.242.16 -k 1
+              - /tmp/telegraf-utils.sh product-managed -c 10.1.1.41 -t $TOKEN -v ops-a.site-a.vcf.lab -k 1
               - echo 'Telegraf Agent Installed' >> /tmp/finished.txt
               #--------------------------------------------------------------------------#
               #------------------------- Install Logs Agent  ----------------------------#
               # download helper script
               - cd /tmp
-              - wget --quiet http://lvn-sc-www.showcase.tmm.broadcom.lab/downloads/vmware-log-insight-agent_8.14.0-22552671_all.deb
+              - wget --quiet http://10.138.241.6/downloads/vmware-log-insight-agent_8.14.0-22552671_all.deb
               #Install the agent
               - dpkg -i vmware-log-insight-agent_8.14.0-22552671_all.deb
-              - export logs_ip="opslogs-a.prod-a.hol.lab"
+              - export logs_ip="opslogs-a.site-a.vcf.lab"
               - sed -i "s/;hostname=OPERATIONS_FOR_LOGS/hostname=$logs_ip/g" /var/lib/loginsight-agent/liagent.ini
               - sed -i "0,/;ssl=yes/s/;ssl=yes/ssl_accept_any=yes/" /var/lib/loginsight-agent/liagent.ini
               - systemctl restart liagentd

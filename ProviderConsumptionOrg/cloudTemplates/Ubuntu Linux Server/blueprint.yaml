@@ -1,12 +1,8 @@
 formatVersion: 2
 name: Ubuntu Linux Server
-description: Deploy various versions of Ubuntu Server
+description: All Apps Ubuntu Linux Server
 version: 1
 inputs:
-  namespace:
-    type: string
-    title: Namespace
-    $data: /data/namespaces
   vm_name:
     type: string
     title: Virtual Machine Name
@@ -14,18 +10,22 @@ inputs:
     pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
   os_version:
     type: string
-    title: Virtual Machine Size
-    description: Select a Ubuntu Version
-    default: vmi-254818e8ba87082b4
+    title: Operating System
+    description: Select the operating system to install.
+    default: vmi-cc8b5b50b1836f4bf
     oneOf:
       - title: Ubuntu 18.04
-        const: vmi-7eb4f6375da7f7198
+        const: vmi-0185032cbc01db5c2
       - title: Ubuntu 20.04
-        const: vmi-a2b8f5caa63e7baf0
+        const: vmi-3a453e3de72f8f3b0
       - title: Ubuntu 22.04
-        const: vmi-3d4355b8ab4c4bdcb
+        const: vmi-ced981a44ed2c155a
       - title: Ubuntu 24.04
-        const: vmi-254818e8ba87082b4
+        const: vmi-cc8b5b50b1836f4bf
+  namespace:
+    type: string
+    title: Namespace
+    $data: /data/namespaces
   storageClass:
     type: string
     title: Storage Class
@@ -42,9 +42,9 @@ inputs:
     title: Admin Username
   password:
     type: string
-    description: The password you would like to use for the admin account.
+    description: The password you would like to use for the admin account. Default is VMware123!VMware123!
     title: Admin Password
-    default: VMware1!
+    default: VMware123!VMware123!
     pattern: '[a-z0-9A-Z@#$]+'
     encrypted: true
 resources:
@@ -92,12 +92,11 @@ resources:
           storageClass: ${input.storageClass}
           powerState: PoweredOn
           network:
-            domainName: showcase.tmm.broadcom.lab
+            domainName: site-a.vcf.lab
             nameservers:
-              - 10.138.241.1
-              - 10.138.241.2
+              - 10.1.10.129
             searchDomains:
-              - showcase.tmm.broadcom.lab
+              - site-a.vcf.lab
           bootstrap:
             cloudInit:
               rawCloudConfig:
@@ -144,34 +143,33 @@ resources:
 
             runcmd:
               ### Cloud-init script for agents
-              #------------------ Install Telegraf Agent  --------------------#
+              #----------------------- Install Telegraf Agent  -------------------------#
               # download helper script
-              - wget -P /tmp/ --no-check-certificate https://10.138.242.69/downloads/salt/telegraf-utils.sh
+              - wget -P /tmp/ --no-check-certificate https://10.138.242.22/downloads/salt/telegraf-utils.sh
               - chmod 755 /tmp/telegraf-utils.sh
               
               #Get a token
-              #- curl -o /tmp/token.txt -k -H 'Content-Type: application/json' -d '{"username": "svc-ops-auto","authSource": "LOCAL","password": "VMware123"}' 'https://ops-a.vcf02.showcase.tmm.broadcom.lab/suite-api/api/auth/token/acquire?_no_links=true'
+              #- curl -o /tmp/token.txt -k -H 'Content-Type: application/json' -d '{"username": "svc-ops-auto","authSource": "LOCAL","password": "VMware123^"}' 'https://ops-a.site-a.vcf.lab/suite-api/api/auth/token/acquire?_no_links=true'
               # Convert the above curl to base64 to escape special characters in the password
-              - echo "ICMhL2Jpbi9iYXNoCmN1cmwgLW8gL3RtcC90b2tlbi50eHQgLWsgLUggJ0NvbnRlbnQtVHlwZTogYXBwbGljYXRpb24vanNvbicgLWQgJ3sidXNlcm5hbWUiOiAic3ZjLW9wcy1hdXRvIiwiYXV0aFNvdXJjZSI6ICJMT0NBTCIsInBhc3N3b3JkIjogIlZNd2FyZTEyM14ifScgJ2h0dHBzOi8vb3BzLWEudmNmMDIuc2hvd2Nhc2UudG1tLmJyb2FkY29tLmxhYi9zdWl0ZS1hcGkvYXBpL2F1dGgvdG9rZW4vYWNxdWlyZT9fbm9fbGlua3M9dHJ1ZScg" | base64 -d > /tmp/run_curl.sh
+              - echo "Y3VybCAtbyAvdG1wL3Rva2VuLnR4dCAtayAtSCAnQ29udGVudC1UeXBlOiBhcHBsaWNhdGlvbi9qc29uJyAtZCAneyJ1c2VybmFtZSI6ICJzdmMtb3BzLWF1dG8iLCJhdXRoU291cmNlIjogIkxPQ0FMIiwicGFzc3dvcmQiOiAiVk13YXJlMTIzXiJ9JyAnaHR0cHM6Ly9vcHMtYS5zaXRlLWEudmNmLmxhYi9zdWl0ZS1hcGkvYXBpL2F1dGgvdG9rZW4vYWNxdWlyZT9fbm9fbGlua3M9dHJ1ZSc=" | base64 -d > /tmp/run_curl.sh
               - chmod +x /tmp/run_curl.sh
               - /tmp/run_curl.sh
               - TOKEN=`cat /tmp/token.txt | grep -o '"token":"[^"]*"' | sed 's/"token":"\|"//g'`
-
-              #Install the agent
-              - /tmp/telegraf-utils.sh product-managed -c 10.138.242.69 -t $TOKEN -v 10.138.242.65 -k 1
-              - echo 'Telegraf Agent Installed' >> /tmp/finished.txt
-              #----------------------------------------------------------------#
-              #-------------------- Install Logs Agent  -----------------------#
-              # download helper script
-              - wget -P /tmp/ --quiet http://lvn-sc-www.showcase.tmm.broadcom.lab/downloads/vmware-log-insight-agent_8.14.0-22552671_all.deb
               
               #Install the agent
-              - dpkg -i /tmp/vmware-log-insight-agent_8.14.0-22552671_all.deb
-              - export logs_ip="opslogs-a.vcf02.showcase.tmm.broadcom.lab"
+              - /tmp/telegraf-utils.sh product-managed -c 10.138.242.22 -t $TOKEN -v 10.138.242.16 -k 1
+              - echo 'Telegraf Agent Installed' >> /tmp/finished.txt
+              #--------------------------------------------------------------------------#
+              #------------------------- Install Logs Agent  ----------------------------#
+              # download helper script
+              - cd /tmp
+              - wget --quiet http://lvn-sc-www.showcase.tmm.broadcom.lab/downloads/vmware-log-insight-agent_8.14.0-22552671_all.deb
+              #Install the agent
+              - dpkg -i vmware-log-insight-agent_8.14.0-22552671_all.deb
+              - export logs_ip="opslogs-a.prod-a.hol.lab"
               - sed -i "s/;hostname=OPERATIONS_FOR_LOGS/hostname=$logs_ip/g" /var/lib/loginsight-agent/liagent.ini
               - sed -i "0,/;ssl=yes/s/;ssl=yes/ssl_accept_any=yes/" /var/lib/loginsight-agent/liagent.ini
               - systemctl restart liagentd
               - systemctl enable liagentd
-              - echo 'Logs Agent Installed' >> /tmp/finished.txt
-              #----------------------------------------------------------------#
+              #-------------------------------------------------------------------------#
               - echo 'Cloud-init is done!' >> /tmp/finished.txt

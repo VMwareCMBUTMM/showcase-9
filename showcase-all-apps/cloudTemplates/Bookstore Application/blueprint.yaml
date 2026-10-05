@@ -1,0 +1,444 @@
+# ============================================================================
+# File: The Bookstore App.yaml
+# Author: Maher AlAsfar
+# Email: maher.alasfar@broadcom.com
+# Created: 2025-03-01
+# Last Modified: 2026-09-28
+# Description: VCFA 9.1 Blueprint to Deploy the bookstore e-commerce app on a newly provisoined VKS Cluster in an existing vSphere Namespace
+# App repo : https://github.com/tmm-demo-apps/bookstore-app
+# Version: 1.2
+# ============================================================================
+formatVersion: 2
+name: The Bookstore App
+version: 2
+metadata:
+  deploymentSettings:
+    disableUpdateDay2Action: true
+    hideDisabledDay2Actions: true
+outputs:
+  __deploymentOverview:
+    value: |-
+      ## Bookstore E-commerce Application
+      A production-ready e-commerce platform built to demonstrate VMware Cloud Foundation (VCF) capabilities. 
+      Features enterprise-grade infrastructure including Elasticsearch search, Redis caching, MinIO object storage, 
+      and real-world content from Project Gutenberg.
+
+      ### Application Details
+
+      **Bookstore Url   :** ${resource.Bookstore_CM.object.data["bookstore-url"]}
+
+      **Reader Url      :** ${resource.Bookstore_CM.object.data["reader-url"]}
+
+      **For more details:** https://github.com/tmm-demo-apps/bookstore-app
+           
+inputs:
+############################################
+# Dynamic Data Retrieval for Known objects #
+############################################
+  namespace:
+    type: string
+    title: Namespace
+    $data: /data/namespaces
+  vm_size:
+    type: string
+    title: Virtual Machine Class
+    default: best-effort-large
+    $data: /data/virtualmachineclasses?namespace={{namespace}}
+  storageclass:
+    type: string
+    title: Storage Class
+    $data: /data/storageclasses?namespace={{namespace}}
+#############################################       
+  controlPlaneCount:
+    type: integer
+    title: VKS ControlPlane Node count
+    description: Control plane node count
+    default: 1
+    enum:
+      - 1
+      - 3
+  minWorkerCount:
+    type: string
+    title: Min VKS Worker Node count
+    description: Minimum VKS Worker node count
+    default: '1'
+    oneOf:
+      - title: 1
+        const: '1'
+      - title: 2
+        const: '2'
+      - title: 3
+        const: '3'
+  maxWorkerCount:
+    type: string
+    title: Max VKS Worker Node count
+    description: Maximum VKS Worker node count
+    default: '2'
+    oneOf:
+      - title: 1
+        const: '1'
+      - title: 2
+        const: '2'
+      - title: 3
+        const: '3'
+      - title: 4
+        const: '4'
+      - title: 5
+        const: '5'
+resources:
+  Namespace:
+    type: CCI.Supervisor.Namespace
+    properties:
+      name: ${input.namespace}
+      existing: true
+  VKS-Job-SA:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-vks-job-sa
+  CM_Role:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - VKS-Job-SA
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: Role
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager
+        rules:
+          - apiGroups:
+              - ''
+            resources:
+              - configmaps
+            verbs:
+              - get
+              - list
+              - watch
+              - create
+              - delete
+              - patch
+  CM_Role_Binding:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - CM_Role
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager-binding
+        subjects:
+          - kind: ServiceAccount
+            name: ${to_k8s_name(env.deploymentName, 63)}-vks-job-sa
+        roleRef:
+          kind: Role
+          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager
+          apiGroup: rbac.authorization.k8s.io
+  cert-manager-addon:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - CM_Role_Binding
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: addons.kubernetes.vmware.com/v1alpha1
+        kind: AddonInstall
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-cert-manager
+        spec:
+          addonRef:
+            name: cert-manager
+          clusters:
+            - selector:
+                matchLabels:
+                  cluster.x-k8s.io/cluster-name: ${to_k8s_name(env.deploymentName, 63)}
+  istio-secret:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - cert-manager-addon
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-istio-values
+        stringData:
+          values.yaml: |
+            #@data/values
+            #@overlay/match-child-defaults missing_ok=True
+            ---
+            gateways:
+              ingress:
+                enabled: true
+  CLUSTER:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - istio-addon
+    properties:
+      context: ${resource.Namespace.id}
+      wait:
+        conditions:
+          - type: ControlPlaneInitialized
+            status: 'True'
+          - type: TopologyReconciled
+            status: 'True'
+          - type: WorkersAvailable
+            status: 'True'
+          - type: AddonsReconciled
+            status: 'True'
+        fields:
+          - indicatesFailure: false
+            path: status.phase
+            value: Provisioned
+          - indicatesFailure: false
+            path: status.initialization.controlPlaneInitialized
+            value: 'true'
+          - indicatesFailure: false
+            path: status.initialization.infrastructureProvisioned
+            value: 'true'
+      manifest:
+        apiVersion: cluster.x-k8s.io/v1beta2
+        kind: Cluster
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}
+          labels:
+            cluster.x-k8s.io/cluster-name: ${to_k8s_name(env.deploymentName, 63)}
+        spec:
+          clusterNetwork:
+            pods:
+              cidrBlocks:
+                - 192.168.156.0/20
+            services:
+              cidrBlocks:
+                - 10.96.0.0/12
+            serviceDomain: cluster.local
+          topology:
+            classRef:
+              name: ${propgroup.environment.clusterClass}
+              namespace: vmware-system-vks-public
+            version: ${propgroup.environment.vksVersion}
+            variables:
+              - name: vmClass
+                value: ${input.vm_size}
+              - name: storageClass
+                value: ${input.storageclass}
+              - name: kubernetes
+                value:
+                  security:
+                    podSecurityStandard:
+                      audit: restricted
+                      enforce: privileged
+                      warn: restricted
+            controlPlane:
+              replicas: ${input.controlPlaneCount}
+              metadata:
+                annotations:
+                  run.tanzu.vmware.com/resolve-os-image: os-name=photon, content-library=${propgroup.environment.vksContentLibraryId}
+            workers:
+              machineDeployments:
+                - class: node-pool
+                  name: ${to_k8s_name(env.deploymentName, 63)}-np
+                  metadata:
+                    annotations:
+                      cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: ${input.maxWorkerCount}
+                      cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size: ${input.minWorkerCount}
+                      run.tanzu.vmware.com/resolve-os-image: os-name=photon, content-library=${propgroup.environment.vksContentLibraryId}
+                  variables:
+                    overrides:
+                      - name: vmClass
+                        value: ${input.vm_size}
+  istio-addon:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - istio-secret
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: addons.kubernetes.vmware.com/v1alpha1
+        kind: AddonInstall
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-istio
+        spec:
+          addonRef:
+            name: istio
+          addonConfigRef:
+            name: ${to_k8s_name(env.deploymentName, 63)}-istio-values
+            kind: Secret
+          clusters:
+            - selector:
+                matchLabels:
+                  cluster.x-k8s.io/cluster-name: ${to_k8s_name(env.deploymentName, 63)}
+  VKS_Job:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - CLUSTER
+    createTimeout: 600m
+    properties:
+      context: ${resource.Namespace.id}
+      wait:
+        conditions:
+          - indicatesFailure: false
+            status: 'True'
+            type: Complete
+        fields:
+          - indicatesFailure: true
+            path: status.failed
+            value: '1'
+      manifest:
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-vks-job-${env.shortDeploymentId}
+        spec:
+          completions: 1
+          parallelism: 1
+          #vks-job-pod is deleted after 24h
+          ttlSecondsAfterFinished: 86400
+          backoffLimit: 0
+          template:
+            spec:
+              serviceAccountName: ${to_k8s_name(env.deploymentName, 63)}-vks-job-sa
+              containers:
+                - name: vks-job
+                  image: paif.packages.broadcom.com/tkg-gpu-console:9.0.0.0
+                  resources:
+                    requests:
+                      cpu: 500m
+                      memory: 1Gi
+                    limits:
+                      cpu: '2'
+                      memory: 4Gi
+                  volumeMounts:
+                    - name: cluster-kubeconfig-volume
+                      mountPath: /etc/vks-kubeconfig
+                      readOnly: true
+                  command:
+                    - /bin/bash
+                    - '-c'
+                  args:
+                    - |
+                      set -euxo pipefail
+                      # Function to set KUBECONFIG to VKS KubeConfig
+                      set_vks_kubeconfig() {
+                        local kubeconfig_file="/etc/vks-kubeconfig/vks-cluster-kubeconfig-admin"
+
+                        if [ ! -f "$kubeconfig_file" ]; then
+                          echo "Failure: VKS kubeconfig file does not exist: $kubeconfig_file"
+                          exit 1
+                        fi
+
+                        export KUBECONFIG="$kubeconfig_file"
+                        echo "Success: VKS kubeconfig is set to $KUBECONFIG"
+                      }
+
+                      # Call the set_vks_kubeconfig() function
+                      set_vks_kubeconfig
+
+                      # get to verify current context 
+                      #=========================================
+                      kubectl config current-context
+
+                      # Install git
+                      #=========================================
+                      apt update
+                      apt install git -y
+
+                      # Clone the bookstore repo
+                      #=========================================
+                      timeout 300 sh -c 'until git clone --depth 1 https://github.com/tmm-demo-apps/bookstore-app.git; do echo "git clone failed, retrying in 15 seconds..."; rm -rf bookstore-app; sleep 15; done' || exit 1
+                      cd bookstore-app
+
+                      # Build Helm dependencies
+                      #=========================================         
+                      helm dependency update ./helm/demo-suite
+
+                      # Wait for cert-manager to be ready
+                      #========================================= 
+                      echo "Waiting for cert-manager to become fully ready..."
+
+                      until kubectl get crd certificates.cert-manager.io clusterissuers.cert-manager.io issuers.cert-manager.io certificaterequests.cert-manager.io >/dev/null 2>&1; do echo "Waiting for cert-manager CRDs to be created..."; sleep 5; done
+
+                      kubectl wait --for=condition=Established crd/certificates.cert-manager.io crd/clusterissuers.cert-manager.io crd/issuers.cert-manager.io crd/certificaterequests.cert-manager.io --timeout=10m
+
+                      until kubectl get deployment/cert-manager deployment/cert-manager-cainjector deployment/cert-manager-webhook -n cert-manager >/dev/null 2>&1; do echo "Waiting for cert-manager deployments to be created..."; sleep 5; done
+
+                      kubectl wait --for=condition=Available deployment/cert-manager deployment/cert-manager-cainjector deployment/cert-manager-webhook -n cert-manager --timeout=10m
+
+                      echo "cert-manager CRDs and components are ready"
+
+                      # Wait for Gateway API to be ready
+                      #========================================= 
+                      echo "Waiting for Gateway API to become ready..."
+
+                      until kubectl get crd gateways.gateway.networking.k8s.io httproutes.gateway.networking.k8s.io >/dev/null 2>&1; do echo "Waiting for Gateway API CRDs to be created..."; sleep 5; done
+
+                      kubectl wait --for=condition=Established crd/gateways.gateway.networking.k8s.io crd/httproutes.gateway.networking.k8s.io --timeout=10m
+
+                      echo "Gateway API CRDs are ready"
+
+                      # Deploy bookstore application
+                      #=========================================   
+                      helm install -n default demo ./helm/demo-suite -f ./helm/demo-suite/values-small.yaml --set global.domain=dummy.local --set global.storageClassName=${input.storageclass} --set chatbot.enabled=false --set bookstore.image.pullPolicy=Always --set reader.epubSeed.enabled=true --set reader.image.pullPolicy=Always --timeout 20m
+
+                      # 2. Wait for the LoadBalancer to get an IP from the infrastructure
+                      echo "Waiting for Gateway IP..."
+                      while [ -z "$(kubectl get svc demo-gateway-istio -n bookstore -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)" ]; do 
+                        sleep 2 
+                      done
+
+                      # 3. Grab the IP
+                      INGRESS_IP=$(kubectl get svc demo-gateway-istio -n bookstore -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                      echo "Gateway IP is: $INGRESS_IP"
+
+                      helm upgrade -n default demo ./helm/demo-suite -f ./helm/demo-suite/values-small.yaml --set global.domain=$INGRESS_IP.sslip.io --set global.storageClassName=${input.storageclass} --set chatbot.enabled=false --set bookstore.image.pullPolicy=Always --set reader.epubSeed.enabled=true --set reader.image.pullPolicy=Always --timeout 20m
+
+                      # Echo Helm depoloyment completed
+                      #=========================================                         
+                      echo "Helm deployment completed"
+
+                      # Create bookstore-endpoints ConfigMap on the parent Namespace
+                      #============================================================= 
+                      unset KUBECONFIG
+                      kubectl create configmap ${to_k8s_name(env.deploymentName, 63)}-bookstore-endpoints --from-literal=ingress-ip=$INGRESS_IP --from-literal=bookstore-url=https://bookstore.$INGRESS_IP.sslip.io --from-literal=reader-url=https://reader.$INGRESS_IP.sslip.io --dry-run=client -o yaml | kubectl apply -f -                      
+
+                      # Enable / Disable Debug Mode to access the Job/pod running the script. DEBUG_MODE=true/false
+                      #============================================================================================ 
+                      DEBUG_MODE=false
+
+                      if [ "$DEBUG_MODE" = true ]; then
+                        echo "Pod entering debug mode — sleeping forever"
+                      else
+                        echo "Pod running normally — debug mode disabled"
+                      fi
+
+                      while $DEBUG_MODE; do
+                        sleep 3600
+                      done                      
+              restartPolicy: Never
+              volumes:
+                - name: cluster-kubeconfig-volume
+                  secret:
+                    secretName: ${to_k8s_name(env.deploymentName, 63)}-kubeconfig
+                    items:
+                      - key: value
+                        path: vks-cluster-kubeconfig-admin
+  Bookstore_CM:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - VKS_Job
+    properties:
+      existing: true
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-bookstore-endpoints

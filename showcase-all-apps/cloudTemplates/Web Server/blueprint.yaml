@@ -44,7 +44,7 @@ resources:
     properties:
       context: ${resource.Namespace.id}
       manifest:
-        apiVersion: vmoperator.vmware.com/v1alpha3
+        apiVersion: vmoperator.vmware.com/v1alpha5
         kind: VirtualMachineService
         metadata:
           name: ${input.web_vm_name}
@@ -69,7 +69,7 @@ resources:
     properties:
       context: ${resource.Namespace.id}
       manifest:
-        apiVersion: vmoperator.vmware.com/v1alpha3
+        apiVersion: vmoperator.vmware.com/v1alpha5
         kind: VirtualMachine
         metadata:
           name: ${input.web_vm_name}
@@ -148,36 +148,4 @@ resources:
               - systemctl restart apache2
               
               - echo 'Apache Installed' >> /tmp/finished.txt
-                  
-              ### Cloud-init script for agents
-              #------------------ Install Telegraf Agent  --------------------#
-              # download helper script
-              - wget -P /tmp/ --no-check-certificate https://${propgroup.environment.opscollector_01a}/downloads/salt/telegraf-utils.sh
-              - chmod 755 /tmp/telegraf-utils.sh
-              
-              #Get a token
-              #- curl -o /tmp/token.txt -k -H 'Content-Type: application/json' -d '{"username": "svc-ops-auto","authSource": "LOCAL","password": "VMware123"}' 'https://${propgroup.environment.ops_a}/suite-api/api/auth/token/acquire?_no_links=true'
-              # Convert the above curl to base64 to escape special characters in the password
-              - echo "ICMhL2Jpbi9iYXNoCmN1cmwgLW8gL3RtcC90b2tlbi50eHQgLWsgLUggJ0NvbnRlbnQtVHlwZTogYXBwbGljYXRpb24vanNvbicgLWQgJ3sidXNlcm5hbWUiOiAic3ZjLW9wcy1hdXRvIiwiYXV0aFNvdXJjZSI6ICJMT0NBTCIsInBhc3N3b3JkIjogIlZNd2FyZTEyM14ifScgJ2h0dHBzOi8vb3BzLWEudmNmMDIuc2hvd2Nhc2UudG1tLmJyb2FkY29tLmxhYi9zdWl0ZS1hcGkvYXBpL2F1dGgvdG9rZW4vYWNxdWlyZT9fbm9fbGlua3M9dHJ1ZScg" | base64 -d > /tmp/run_curl.sh
-              - chmod +x /tmp/run_curl.sh
-              - /tmp/run_curl.sh
-              - TOKEN=`cat /tmp/token.txt | grep -o '"token":"[^"]*"' | sed 's/"token":"\|"//g'`
-
-              #Install the agent
-              - /tmp/telegraf-utils.sh product-managed -c ${propgroup.environment.opscollector_01a} -t $TOKEN -v ${propgroup.environment.ops_a} -k 1
-              - echo 'Telegraf Agent Installed' >> /tmp/finished.txt
-              #----------------------------------------------------------------#
-              #-------------------- Install Logs Agent  -----------------------#
-              # download helper script
-              - wget -P /tmp/ --quiet http://${propgroup.environment.www}/downloads/vmware-log-insight-agent_8.14.0-22552671_all.deb
-              
-              #Install the agent
-              - dpkg -i /tmp/vmware-log-insight-agent_8.14.0-22552671_all.deb
-              - export logs_ip="${propgroup.environment.opslogs_01a}"
-              - sed -i "s/;hostname=OPERATIONS_FOR_LOGS/hostname=$logs_ip/g" /var/lib/loginsight-agent/liagent.ini
-              - sed -i "0,/;ssl=yes/s/;ssl=yes/ssl_accept_any=yes/" /var/lib/loginsight-agent/liagent.ini
-              - systemctl restart liagentd
-              - systemctl enable liagentd
-              - echo 'Logs Agent Installed' >> /tmp/finished.txt
-              #----------------------------------------------------------------#
               - echo 'Cloud-init is done!' >> /tmp/finished.txt

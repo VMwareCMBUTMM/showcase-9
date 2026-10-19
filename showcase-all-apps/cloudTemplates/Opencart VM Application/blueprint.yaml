@@ -1,7 +1,7 @@
 formatVersion: 2
 name: Opencart VM Application
 description: Provision the Opencart application with a SQL and Apache VM
-version: 2
+version: 5
 inputs:
   namespace:
     type: string

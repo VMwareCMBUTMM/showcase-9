@@ -1,7 +1,7 @@
 formatVersion: 2
 name: Web Servers
 description: Deploy a Apache Web Server
-version: 4
+version: 5
 metadata:
   deploymentSettings:
     disableUpdateDay2Action: false
@@ -12,9 +12,9 @@ outputs:
       ## <img src="https://raw.githubusercontent.com/VMwareCMBUTMM/showcase-9/ba68782b1bff84d34b886142d2970e701b43b586/showcase-all-apps/cloudTemplates/icons/success.svg" alt="Apache Logo" width="100" height="100"> Web Server Deployment
 
 
-      |      **Deployment Details**                   |
-      |-----------------------------------------------|
-      |      **Load Balancer Url   :** http://${resource.SSH_HTTP_LB.object.status.loadBalancer.ingress[0].ip}      |
+      |       **Deployment Details**                    |
+      |:-----------------------------------------------:|
+      |      Load Balancer Url :  http://${resource.SSH_HTTP_LB.object.status.loadBalancer.ingress[0].ip}      |
 inputs:
 ############################################
 # Dynamic Data Retrieval for Known objects #

@@ -1,38 +1,38 @@
 formatVersion: 2
 name: Web Servers
 description: Deploy a Apache Web Server
-version: 1
+version: 3
+metadata:
+  deploymentSettings:
+    disableUpdateDay2Action: false
+    hideDisabledDay2Actions: true
+outputs:
+  __deploymentOverview:
+    value: |-
+      ## <img src="https://raw.githubusercontent.com/VMwareCMBUTMM/showcase-9/ba68782b1bff84d34b886142d2970e701b43b586/showcase-all-apps/cloudTemplates/icons/success.svg" alt="Apache Logo" width="100" height="100"> Web Server Deployment
+
+
+      |      **Deployment Details**                   |
+      |-----------------------------------------------|
+      |      **Load Balancer Url   :** http://${resource.SSH_HTTP_LB.object.status.loadBalancer.ingress[0].ip}      |
 inputs:
+############################################
+# Dynamic Data Retrieval for Known objects #
+############################################
   namespace:
     type: string
     title: Namespace
     $data: /data/namespaces
-  web_vm_name:
+  vm_size:
     type: string
-    title: Apache Virtual Machine Name
-    description: Enter a name for the Web Virtual Machine
-    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-  storageClass:
+    title: Virtual Machine Class
+    default: best-effort-small
+    $data: /data/virtualmachineclasses?namespace={{namespace}}
+  storageclass:
     type: string
     title: Storage Class
     $data: /data/storageclasses?namespace={{namespace}}
-  vm_size:
-    type: string
-    title: Virtual Machine Size
-    description: Select a Virtual Machine Size
-    $data: /data/virtualmachineclasses?namespace={{namespace}}
-  username:
-    type: string
-    description: The username you would like to have for the admin account.
-    default: demouser
-    title: Admin Username
-  password:
-    type: string
-    description: The password you would like to use for the admin account. Default is VMware1!
-    title: Admin Password
-    default: VMware1!
-    pattern: '[a-z0-9A-Z@#$]+'
-    encrypted: true
+#############################################
 resources:
   Namespace:
     type: CCI.Supervisor.Namespace
@@ -47,10 +47,10 @@ resources:
         apiVersion: vmoperator.vmware.com/v1alpha5
         kind: VirtualMachineService
         metadata:
-          name: ${input.web_vm_name}
+          name: ${to_k8s_name(env.deploymentName, 63)}-web
         spec:
           selector:
-            vm-lb-selector: ${input.web_vm_name}
+            vm-lb-selector: ${to_k8s_name(env.deploymentName, 63)}-web
           type: LoadBalancer
           ports:
             - name: ssh
@@ -68,20 +68,29 @@ resources:
       - SSH_HTTP_LB
     properties:
       context: ${resource.Namespace.id}
+      wait:
+        conditions:
+          - type: VirtualMachineTools
+            status: 'True'
+          - type: VirtualMachineHardwareVolumesVerified
+            status: 'True'
+          - type: GuestCustomization
+            status: 'True'
+          - type: VirtualMachineCreated
+            status: 'True'
       manifest:
         apiVersion: vmoperator.vmware.com/v1alpha5
         kind: VirtualMachine
         metadata:
-          name: ${input.web_vm_name}
+          name: ${to_k8s_name(env.deploymentName, 63)}-web
           labels:
-            vm-selector: ${input.web_vm_name}
-            vm-lb-selector: ${input.web_vm_name}
+            vm-selector: ${to_k8s_name(env.deploymentName, 63)}-web
+            vm-lb-selector: ${to_k8s_name(env.deploymentName, 63)}-web
         spec:
           className: ${input.vm_size}
-          #Friendly image name: ubuntu-server-18.04-lts-bionic-beaver
-          imageName: ${propgroup.environment.ubuntu1804}
-          #storageClass: ${propgroup.environment.storagepolicy}
-          storageClass: ${input.storageClass}
+          #Friendly image name: ubuntu-server-24.04-lts
+          imageName: ${propgroup.environment.ubuntu2404}
+          storageClass: ${input.storageclass}
           powerState: PoweredOn
           network:
             domainName: ${propgroup.environment.domain}
@@ -93,7 +102,7 @@ resources:
           bootstrap:
             cloudInit:
               rawCloudConfig:
-                name: ${input.web_vm_name}-bootstrap-secret
+                name: ${to_k8s_name(env.deploymentName, 63)}-web-bootstrap-secret
                 key: user-data
   Web_BOOTSTRAP:
     type: CCI.Supervisor.Resource
@@ -103,42 +112,24 @@ resources:
         apiVersion: v1
         kind: Secret
         metadata:
-          name: ${input.web_vm_name}-bootstrap-secret
+          name: ${to_k8s_name(env.deploymentName, 63)}-web-bootstrap-secret
           labels:
-            vm-selector: ${input.web_vm_name}
+            vm-selector: ${to_k8s_name(env.deploymentName, 63)}-web
         stringData:
           user-data: |
             #cloud-config
             hostname: ${self.resourceName}
             package_upgrade: true
-            package_reboot_if_required: true
+            package_reboot_if_required: false
             apt_source:
               - source: deb http://archive.ubuntu.com/ubuntu main universe multiverse restricted
 
             packages:
               - apache2
-              - unzip
-              - open-vm-tools
-
-            ssh_pwauth: true
-
-            users:
-              - name: ${input.username}
-                lock_passwd: false
-                sudo: ALL=(ALL) NOPASSWD:ALL
-                groups: [sudo]
-                shell: /bin/bash
-
-            chpasswd:
-              users:
-                - name: ${input.username}
-                  password: ${input.password}
-                  type: text
-              expire: false
 
             runcmd:
               ### update the top of the web page to the web servers resource name
-              - sed -i 's/Apache2 Ubuntu Default Page/Showcase Web Server ${input.web_vm_name}/g' /var/www/html/index.html
+              - sed -i 's/Apache2 Ubuntu Default Page/Showcase Web Server ${env.deploymentName}/g' /var/www/html/index.html
               
               ### Set to show detailed apache metrics with the telegraf agent
               - sed -i '/Require local/a \\tRequire all granted' /etc/apache2/mods-enabled/status.conf

@@ -10,7 +10,7 @@
 # ============================================================================
 formatVersion: 2
 name: The Bookstore App
-version: 3
+version: 4
 metadata:
   deploymentSettings:
     disableUpdateDay2Action: true
@@ -181,7 +181,7 @@ resources:
             - selector:
                 matchLabels:
                   cluster.x-k8s.io/cluster-name: ${to_k8s_name(env.deploymentName, 63)}
-  prometheus-addon-config:
+  prometheus-addon:
     type: CCI.Supervisor.Resource
     properties:
       context: ${resource.Namespace.id}
@@ -202,7 +202,7 @@ resources:
     type: CCI.Supervisor.Resource
     dependsOn:
       - istio-addon
-      - prometheus-addon-config
+      - prometheus-addon
     properties:
       context: ${resource.Namespace.id}
       wait:
@@ -420,7 +420,7 @@ resources:
 
                       # Deploy bookstore application
                       #=========================================   
-                      helm install -n default demo ./helm/demo-suite -f ./helm/demo-suite/values-small.yaml --set global.domain=dummy.local --set global.storageClassName=${input.storageclass} --set chatbot.enabled=false --set bookstore.image.pullPolicy=Always --set reader.epubSeed.enabled=true --set reader.image.pullPolicy=Always --timeout 20m
+                      helm install -n default demo ./helm/demo-suite -f ./helm/demo-suite/values-small.yaml --set global.domain=dummy.local --set chatbot.enabled=false --set bookstore.image.pullPolicy=Always --set reader.epubSeed.enabled=true --set reader.image.pullPolicy=Always --timeout 20m
 
                       # 2. Wait for the LoadBalancer to get an IP from the infrastructure
                       echo "Waiting for Gateway IP..."
@@ -432,7 +432,7 @@ resources:
                       INGRESS_IP=$(kubectl get svc demo-gateway-istio -n bookstore -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
                       echo "Gateway IP is: $INGRESS_IP"
 
-                      helm upgrade -n default demo ./helm/demo-suite -f ./helm/demo-suite/values-small.yaml --set global.domain=$INGRESS_IP.sslip.io --set global.storageClassName=${input.storageclass} --set chatbot.enabled=false --set bookstore.image.pullPolicy=Always --set reader.epubSeed.enabled=true --set reader.image.pullPolicy=Always --timeout 20m
+                      helm upgrade -n default demo ./helm/demo-suite -f ./helm/demo-suite/values-small.yaml --set global.domain=$INGRESS_IP.sslip.io --set chatbot.enabled=false --set bookstore.image.pullPolicy=Always --set reader.epubSeed.enabled=true --set reader.image.pullPolicy=Always --timeout 20m
 
                       # Echo Helm depoloyment completed
                       #=========================================                         

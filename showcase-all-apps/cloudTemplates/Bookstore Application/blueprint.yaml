@@ -10,7 +10,7 @@
 # ============================================================================
 formatVersion: 2
 name: The Bookstore App
-version: 2
+version: 3
 metadata:
   deploymentSettings:
     disableUpdateDay2Action: true
@@ -100,6 +100,46 @@ resources:
         kind: ServiceAccount
         metadata:
           name: ${to_k8s_name(env.deploymentName, 63)}-vks-job-sa
+  istio-secret:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - cert-manager-addon
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-istio-values
+        stringData:
+          values.yaml: |
+            #@data/values
+            #@overlay/match-child-defaults missing_ok=True
+            ---
+            gateways:
+              ingress:
+                enabled: true
+  istio-addon:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - istio-secret
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: addons.kubernetes.vmware.com/v1alpha1
+        kind: AddonInstall
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-istio
+        spec:
+          addonRef:
+            name: istio
+          addonConfigRef:
+            name: ${to_k8s_name(env.deploymentName, 63)}-istio-values
+            kind: Secret
+          clusters:
+            - selector:
+                matchLabels:
+                  cluster.x-k8s.io/cluster-name: ${to_k8s_name(env.deploymentName, 63)}
   CM_Role:
     type: CCI.Supervisor.Resource
     dependsOn:
@@ -123,24 +163,6 @@ resources:
               - create
               - delete
               - patch
-  CM_Role_Binding:
-    type: CCI.Supervisor.Resource
-    dependsOn:
-      - CM_Role
-    properties:
-      context: ${resource.Namespace.id}
-      manifest:
-        apiVersion: rbac.authorization.k8s.io/v1
-        kind: RoleBinding
-        metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager-binding
-        subjects:
-          - kind: ServiceAccount
-            name: ${to_k8s_name(env.deploymentName, 63)}-vks-job-sa
-        roleRef:
-          kind: Role
-          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager
-          apiGroup: rbac.authorization.k8s.io
   cert-manager-addon:
     type: CCI.Supervisor.Resource
     dependsOn:
@@ -159,29 +181,28 @@ resources:
             - selector:
                 matchLabels:
                   cluster.x-k8s.io/cluster-name: ${to_k8s_name(env.deploymentName, 63)}
-  istio-secret:
+  prometheus-addon-config:
     type: CCI.Supervisor.Resource
-    dependsOn:
-      - cert-manager-addon
     properties:
       context: ${resource.Namespace.id}
       manifest:
-        apiVersion: v1
-        kind: Secret
+        apiVersion: addons.kubernetes.vmware.com/v1alpha1
+        kind: AddonConfig
         metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-istio-values
-        stringData:
-          values.yaml: |
-            #@data/values
-            #@overlay/match-child-defaults missing_ok=True
-            ---
-            gateways:
-              ingress:
-                enabled: true
+          name: ${to_k8s_name(env.deploymentName, 63)}-prometheus
+        spec:
+          values:
+            deploycomponents:
+              alertmanager: false
+              kube-state-metrics: true
+              node-exporter: true
+              prometheus: false
+              pushgateway: false
   CLUSTER:
     type: CCI.Supervisor.Resource
     dependsOn:
       - istio-addon
+      - prometheus-addon-config
     properties:
       context: ${resource.Namespace.id}
       wait:
@@ -230,6 +251,10 @@ resources:
                 value: ${input.vm_size}
               - name: storageClass
                 value: ${input.storageclass}
+              - name: vsphereOptions
+                value:
+                  persistentVolumes:
+                    defaultStorageClass: ${input.storageclass}
               - name: kubernetes
                 value:
                   security:
@@ -255,27 +280,36 @@ resources:
                     overrides:
                       - name: vmClass
                         value: ${input.vm_size}
-  istio-addon:
+  CM_Role_Binding:
     type: CCI.Supervisor.Resource
     dependsOn:
-      - istio-secret
+      - CM_Role
     properties:
       context: ${resource.Namespace.id}
       manifest:
-        apiVersion: addons.kubernetes.vmware.com/v1alpha1
-        kind: AddonInstall
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
         metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-istio
-        spec:
-          addonRef:
-            name: istio
-          addonConfigRef:
-            name: ${to_k8s_name(env.deploymentName, 63)}-istio-values
-            kind: Secret
-          clusters:
-            - selector:
-                matchLabels:
-                  cluster.x-k8s.io/cluster-name: ${to_k8s_name(env.deploymentName, 63)}
+          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager-binding
+        subjects:
+          - kind: ServiceAccount
+            name: ${to_k8s_name(env.deploymentName, 63)}-vks-job-sa
+        roleRef:
+          kind: Role
+          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager
+          apiGroup: rbac.authorization.k8s.io
+  Bookstore_CM:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - VKS_Job
+    properties:
+      existing: true
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-bookstore-endpoints
   VKS_Job:
     type: CCI.Supervisor.Resource
     dependsOn:
@@ -430,15 +464,3 @@ resources:
                     items:
                       - key: value
                         path: vks-cluster-kubeconfig-admin
-  Bookstore_CM:
-    type: CCI.Supervisor.Resource
-    dependsOn:
-      - VKS_Job
-    properties:
-      existing: true
-      context: ${resource.Namespace.id}
-      manifest:
-        apiVersion: v1
-        kind: ConfigMap
-        metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-bookstore-endpoints

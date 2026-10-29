@@ -10,7 +10,7 @@
 # ============================================================================
 formatVersion: 2
 name: The Bookstore App
-version: 4
+version: 2
 metadata:
   deploymentSettings:
     disableUpdateDay2Action: true
@@ -100,46 +100,6 @@ resources:
         kind: ServiceAccount
         metadata:
           name: ${to_k8s_name(env.deploymentName, 63)}-vks-job-sa
-  istio-secret:
-    type: CCI.Supervisor.Resource
-    dependsOn:
-      - cert-manager-addon
-    properties:
-      context: ${resource.Namespace.id}
-      manifest:
-        apiVersion: v1
-        kind: Secret
-        metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-istio-values
-        stringData:
-          values.yaml: |
-            #@data/values
-            #@overlay/match-child-defaults missing_ok=True
-            ---
-            gateways:
-              ingress:
-                enabled: true
-  istio-addon:
-    type: CCI.Supervisor.Resource
-    dependsOn:
-      - istio-secret
-    properties:
-      context: ${resource.Namespace.id}
-      manifest:
-        apiVersion: addons.kubernetes.vmware.com/v1alpha1
-        kind: AddonInstall
-        metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-istio
-        spec:
-          addonRef:
-            name: istio
-          addonConfigRef:
-            name: ${to_k8s_name(env.deploymentName, 63)}-istio-values
-            kind: Secret
-          clusters:
-            - selector:
-                matchLabels:
-                  cluster.x-k8s.io/cluster-name: ${to_k8s_name(env.deploymentName, 63)}
   CM_Role:
     type: CCI.Supervisor.Resource
     dependsOn:
@@ -163,6 +123,24 @@ resources:
               - create
               - delete
               - patch
+  CM_Role_Binding:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - CM_Role
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager-binding
+        subjects:
+          - kind: ServiceAccount
+            name: ${to_k8s_name(env.deploymentName, 63)}-vks-job-sa
+        roleRef:
+          kind: Role
+          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager
+          apiGroup: rbac.authorization.k8s.io
   cert-manager-addon:
     type: CCI.Supervisor.Resource
     dependsOn:
@@ -181,28 +159,29 @@ resources:
             - selector:
                 matchLabels:
                   cluster.x-k8s.io/cluster-name: ${to_k8s_name(env.deploymentName, 63)}
-  prometheus-addon:
+  istio-secret:
     type: CCI.Supervisor.Resource
+    dependsOn:
+      - cert-manager-addon
     properties:
       context: ${resource.Namespace.id}
       manifest:
-        apiVersion: addons.kubernetes.vmware.com/v1alpha1
-        kind: AddonConfig
+        apiVersion: v1
+        kind: Secret
         metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-prometheus
-        spec:
-          values:
-            deploycomponents:
-              alertmanager: false
-              kube-state-metrics: true
-              node-exporter: true
-              prometheus: false
-              pushgateway: false
+          name: ${to_k8s_name(env.deploymentName, 63)}-istio-values
+        stringData:
+          values.yaml: |
+            #@data/values
+            #@overlay/match-child-defaults missing_ok=True
+            ---
+            gateways:
+              ingress:
+                enabled: true
   CLUSTER:
     type: CCI.Supervisor.Resource
     dependsOn:
       - istio-addon
-      - prometheus-addon
     properties:
       context: ${resource.Namespace.id}
       wait:
@@ -251,10 +230,6 @@ resources:
                 value: ${input.vm_size}
               - name: storageClass
                 value: ${input.storageclass}
-              - name: vsphereOptions
-                value:
-                  persistentVolumes:
-                    defaultStorageClass: ${input.storageclass}
               - name: kubernetes
                 value:
                   security:
@@ -280,36 +255,27 @@ resources:
                     overrides:
                       - name: vmClass
                         value: ${input.vm_size}
-  CM_Role_Binding:
+  istio-addon:
     type: CCI.Supervisor.Resource
     dependsOn:
-      - CM_Role
+      - istio-secret
     properties:
       context: ${resource.Namespace.id}
       manifest:
-        apiVersion: rbac.authorization.k8s.io/v1
-        kind: RoleBinding
+        apiVersion: addons.kubernetes.vmware.com/v1alpha1
+        kind: AddonInstall
         metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager-binding
-        subjects:
-          - kind: ServiceAccount
-            name: ${to_k8s_name(env.deploymentName, 63)}-vks-job-sa
-        roleRef:
-          kind: Role
-          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager
-          apiGroup: rbac.authorization.k8s.io
-  Bookstore_CM:
-    type: CCI.Supervisor.Resource
-    dependsOn:
-      - VKS_Job
-    properties:
-      existing: true
-      context: ${resource.Namespace.id}
-      manifest:
-        apiVersion: v1
-        kind: ConfigMap
-        metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-bookstore-endpoints
+          name: ${to_k8s_name(env.deploymentName, 63)}-istio
+        spec:
+          addonRef:
+            name: istio
+          addonConfigRef:
+            name: ${to_k8s_name(env.deploymentName, 63)}-istio-values
+            kind: Secret
+          clusters:
+            - selector:
+                matchLabels:
+                  cluster.x-k8s.io/cluster-name: ${to_k8s_name(env.deploymentName, 63)}
   VKS_Job:
     type: CCI.Supervisor.Resource
     dependsOn:
@@ -420,7 +386,7 @@ resources:
 
                       # Deploy bookstore application
                       #=========================================   
-                      helm install -n default demo ./helm/demo-suite -f ./helm/demo-suite/values-small.yaml --set global.domain=dummy.local --set chatbot.enabled=false --set bookstore.image.pullPolicy=Always --set reader.epubSeed.enabled=true --set reader.image.pullPolicy=Always --timeout 20m
+                      helm install -n default demo ./helm/demo-suite -f ./helm/demo-suite/values-small.yaml --set global.domain=dummy.local --set global.storageClassName=${input.storageclass} --set chatbot.enabled=false --set bookstore.image.pullPolicy=Always --set reader.epubSeed.enabled=true --set reader.image.pullPolicy=Always --timeout 20m
 
                       # 2. Wait for the LoadBalancer to get an IP from the infrastructure
                       echo "Waiting for Gateway IP..."
@@ -432,7 +398,7 @@ resources:
                       INGRESS_IP=$(kubectl get svc demo-gateway-istio -n bookstore -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
                       echo "Gateway IP is: $INGRESS_IP"
 
-                      helm upgrade -n default demo ./helm/demo-suite -f ./helm/demo-suite/values-small.yaml --set global.domain=$INGRESS_IP.sslip.io --set chatbot.enabled=false --set bookstore.image.pullPolicy=Always --set reader.epubSeed.enabled=true --set reader.image.pullPolicy=Always --timeout 20m
+                      helm upgrade -n default demo ./helm/demo-suite -f ./helm/demo-suite/values-small.yaml --set global.domain=$INGRESS_IP.sslip.io --set global.storageClassName=${input.storageclass} --set chatbot.enabled=false --set bookstore.image.pullPolicy=Always --set reader.epubSeed.enabled=true --set reader.image.pullPolicy=Always --timeout 20m
 
                       # Echo Helm depoloyment completed
                       #=========================================                         
@@ -464,3 +430,15 @@ resources:
                     items:
                       - key: value
                         path: vks-cluster-kubeconfig-admin
+  Bookstore_CM:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - VKS_Job
+    properties:
+      existing: true
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-bookstore-endpoints

@@ -1,31 +1,47 @@
+version: 2
 formatVersion: 2
 name: Opencart VM Application
 description: Provision the Opencart application with a SQL and Apache VM
-version: 1
+metadata:
+  deploymentSettings:
+    disableUpdateDay2Action: true
+    hideDisabledDay2Actions: true
+outputs:
+  __deploymentOverview:
+    value: |-
+      ## Opencart Shopping Cart Application
+      Opencart is an easy to-use, powerful, Open Source online store management program that can manage multiple online stores from a single back-end.
+      For more details, check https://www.opencart.com/
+
+      ### Application Details
+
+      **OpenCart HTTP Url  :** http://${resource.SSH_HTTP_LB.object.status.loadBalancer.ingress[0].ip}
+
+      **MySQL Host IP      :** ${resource.SSH_MYSQL_LB.object.status.loadBalancer.ingress[0].ip}
+  openCartHttpUrl:
+    value: ${resource.SSH_HTTP_LB.object.status.loadBalancer.ingress[0].ip}
+    description: OpenCart HTTP Application URL
+  mysqlHostIp:
+    value: ${resource.SSH_MYSQL_LB.object.status.loadBalancer.ingress[0].ip}
+    description: MySQL Database Load Balancer IP
 inputs:
+############################################
+# Dynamic Data Retrieval for Known objects #
+############################################
   namespace:
     type: string
     title: Namespace
     $data: /data/namespaces
-  sql_vm_name:
+  vm_size:
     type: string
-    title: MySQL Virtual Machine Name
-    description: Enter a name for the SQL Virtual Machine
-    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-  web_vm_name:
-    type: string
-    title: Apache Virtual Machine Name
-    description: Enter a name for the Web Virtual Machine
-    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-  storageClass:
+    title: Virtual Machine Class
+    default: best-effort-large
+    $data: /data/virtualmachineclasses?namespace={{namespace}}
+  storageclass:
     type: string
     title: Storage Class
     $data: /data/storageclasses?namespace={{namespace}}
-  vm_size:
-    type: string
-    title: Virtual Machine Size
-    description: Select a Virtual Machine Size
-    $data: /data/virtualmachineclasses?namespace={{namespace}}
+############################################# 
   username:
     type: string
     description: The username you would like to have for the installation.
@@ -52,10 +68,10 @@ resources:
         apiVersion: vmoperator.vmware.com/v1alpha5
         kind: VirtualMachineService
         metadata:
-          name: ${input.web_vm_name}
+          name: ${to_k8s_name(env.deploymentName, 63)}-web
         spec:
           selector:
-            vm-lb-selector: ${input.web_vm_name}
+            vm-lb-selector: ${to_k8s_name(env.deploymentName, 63)}-web
           type: LoadBalancer
           ports:
             - name: ssh
@@ -66,7 +82,7 @@ resources:
               protocol: TCP
               port: 80
               targetPort: 80
-  SSH_SQL_LB:
+  SSH_MYSQL_LB:
     type: CCI.Supervisor.Resource
     properties:
       context: ${resource.Namespace.id}
@@ -74,10 +90,10 @@ resources:
         apiVersion: vmoperator.vmware.com/v1alpha5
         kind: VirtualMachineService
         metadata:
-          name: ${input.sql_vm_name}
+          name: ${to_k8s_name(env.deploymentName, 63)}-sql
         spec:
           selector:
-            vm-lb-selector: ${input.sql_vm_name}
+            vm-lb-selector: ${to_k8s_name(env.deploymentName, 63)}-sql
           type: LoadBalancer
           ports:
             - name: ssh
@@ -91,24 +107,36 @@ resources:
   Web_VM:
     type: CCI.Supervisor.Resource
     dependsOn:
-      - SSH_SQL_LB
+      - MYSQL_VM
       - Web_BOOTSTRAP
       - SSH_HTTP_LB
     properties:
       context: ${resource.Namespace.id}
+      wait:
+        conditions:
+          - type: VirtualMachineTools
+            status: 'True'
+          - type: VirtualMachineGuestNetworkConfigSynced
+            status: 'True'
+          - type: VirtualMachineCreated
+            status: 'True'
+        #fields:
+        #  - indicatesFailure: false
+        #    path: status.phase
+        #    value: Provisioned
       manifest:
         apiVersion: vmoperator.vmware.com/v1alpha5
         kind: VirtualMachine
         metadata:
-          name: ${input.web_vm_name}
+          name: ${to_k8s_name(env.deploymentName, 63)}-web
           labels:
-            vm-selector: ${input.web_vm_name}
-            vm-lb-selector: ${input.web_vm_name}
+            vm-selector: ${to_k8s_name(env.deploymentName, 63)}-web
+            vm-lb-selector: ${to_k8s_name(env.deploymentName, 63)}-web
         spec:
           className: ${input.vm_size}
-          #Friendly image name: ubuntu-server-18.04-lts-bionic-beaver
-          imageName: vmi-7eb4f6375da7f7198
-          storageClass: ${input.storageClass}
+          #Friendly image name: ubuntu-server-24.04-lts-noble
+          imageName: ${propgroup.environment.ubuntu2404}
+          storageClass: ${input.storageclass}
           powerState: PoweredOn
           network:
             domainName: ${propgroup.environment.domain}
@@ -120,28 +148,40 @@ resources:
           bootstrap:
             cloudInit:
               rawCloudConfig:
-                name: ${input.web_vm_name}-bootstrap-secret
+                name: ${to_k8s_name(env.deploymentName, 63)}-web-bootstrap-secret
                 key: user-data
   MYSQL_VM:
     type: CCI.Supervisor.Resource
     dependsOn:
       - MySQL_BOOTSTRAP
-      - SSH_SQL_LB
+      - SSH_MYSQL_LB
     properties:
       context: ${resource.Namespace.id}
+      wait:
+        conditions:
+          - type: VirtualMachineTools
+            status: 'True'
+          - type: VirtualMachineGuestNetworkConfigSynced
+            status: 'True'
+          - type: VirtualMachineCreated
+            status: 'True'
+        #fields:
+        #  - indicatesFailure: false
+        #    path: status.phase
+        #    value: Provisioned
       manifest:
         apiVersion: vmoperator.vmware.com/v1alpha5
         kind: VirtualMachine
         metadata:
-          name: ${input.sql_vm_name}
+          name: ${to_k8s_name(env.deploymentName, 63)}-sql
           labels:
-            vm-selector: ${input.sql_vm_name}
-            vm-lb-selector: ${input.sql_vm_name}
+            vm-selector: ${to_k8s_name(env.deploymentName, 63)}-sql
+            vm-lb-selector: ${to_k8s_name(env.deploymentName, 63)}-sql
         spec:
           className: ${input.vm_size}
           #Friendly image name: ubuntu-server-18.04-lts-bionic-beaver
-          imageName: vmi-7eb4f6375da7f7198
-          storageClass: ${input.storageClass}
+          imageName: ${propgroup.environment.ubuntu1804}
+          storageClass: ${input.storageclass}
           powerState: PoweredOn
           network:
             domainName: ${propgroup.environment.domain}
@@ -153,7 +193,7 @@ resources:
           bootstrap:
             cloudInit:
               rawCloudConfig:
-                name: ${input.sql_vm_name}-bootstrap-secret
+                name: ${to_k8s_name(env.deploymentName, 63)}-sql-bootstrap-secret
                 key: user-data
   Web_BOOTSTRAP:
     type: CCI.Supervisor.Resource
@@ -163,18 +203,15 @@ resources:
         apiVersion: v1
         kind: Secret
         metadata:
-          name: ${input.web_vm_name}-bootstrap-secret
+          name: ${to_k8s_name(env.deploymentName, 63)}-web-bootstrap-secret
           labels:
-            vm-selector: ${input.web_vm_name}
+            vm-selector: ${to_k8s_name(env.deploymentName, 63)}-web
         stringData:
           user-data: |
             #cloud-config
             hostname: ${self.resourceName}
-            package_upgrade: true
-            package_reboot_if_required: true
-
-            apt_source:
-              - source: deb http://archive.ubuntu.com/ubuntu main universe multiverse restricted
+            package_upgrade: false
+            package_reboot_if_required: false
 
             packages:
               - apache2
@@ -189,13 +226,10 @@ resources:
               - php-xml
               - php-zip
               - php-curl
-              - php-xmlrpc
-              - mysql-server-5.7
               - unzip
               - open-vm-tools
 
             ssh_pwauth: true
-
 
             users:
               - name: ${input.username}
@@ -222,26 +256,19 @@ resources:
                   type: text
 
             write_files:
-              - path: /etc/cron.hourly/oc_web_cleanup
-                owner: root
-                permissions: '0777'
-                content: "mysql -u ocuser -h ${resource.SSH_SQL_LB.object.status.loadBalancer.ingress[0].ip} -e 'source /var/www/opencart/install/opencart.sql'"
-                
               - path: /etc/hosts
                 content: |
                   127.0.0.1 ${self.resourceName}
-                  185.125.190.82 security.ubuntu.com
-                  185.125.190.82 archive.ubuntu.com
                 append: true
 
             runcmd:
               - systemctl stop apache2
               - USER=ocuser
               - PASS=${input.password}
-              #------------------ Install Packages if not already installed  --------------------#
-              #- systemctl list-units --type=service | grep apache2.service || apt-get install -y apache2 php php-mysql libapache2-mod-php php-cli php-common php-intl php-gd php-mbstring php-xml php-zip php-curl php-xmlrpc mysql-server-5.7 unzip open-vm-tools
+              #------------------ Install OpenCart Demo --------------------#
               - wget --quiet -P /tmp/ http://${propgroup.environment.www}/downloads/opencart-demo.zip
-              - unzip -d /tmp /tmp/opencart-demo.zip
+              - unzip -q -o -d /tmp /tmp/opencart-demo.zip
+              - rm -rf /var/www/opencart
               - mv /tmp/opencart-demo-master/ /var/www/opencart
               - chown -R www-data.www-data /var/www/opencart
               - chmod -R 775 /var/www/opencart
@@ -258,17 +285,12 @@ resources:
               - cd /etc/apache2/sites-available/
               - a2ensite opencart.conf
               - a2dissite 000-default.conf
-              - echo "[client]" >> /etc/mysql/mysql.conf.d/mysqld.cnf
-              - echo "user=ocuser" >> /etc/mysql/mysql.conf.d/mysqld.cnf
-              - echo "password=$PASS" >> /etc/mysql/mysql.conf.d/mysqld.cnf
 
                 #----------------------- Set Website IP Address -----------------------#
-              - export mysqlip=${resource.SSH_SQL_LB.object.status.loadBalancer.ingress[0].ip}
+              - export mysqlip=${resource.SSH_MYSQL_LB.object.status.loadBalancer.ingress[0].ip}
               - export ip4=${resource.SSH_HTTP_LB.object.status.loadBalancer.ingress[0].ip}
                 #----------------------------------------------------------------------#
 
-              - mysql -u $USER -h $mysqlip -e 'source /var/www/opencart/install/opencart.sql'
-              - mysql -u $USER -h $mysqlip -e "INSERT INTO oc_user (user_id,user_group_id,username,password,salt,firstname,lastname,email,image,code,ip,status,date_added) VALUES (1,1,'admin','5feaa046f6927df3d744007ec1491dba838f672e','c4wnfrq9J','demo','user','admin@admin.com','none','none','none',1,'2019-01-31 06:29:09')" opencart
               - sed -i "s/frontendiphere/$ip4/g" /var/www/opencart/config.php
               - sed -i "s/dbiphere/$mysqlip/g" /var/www/opencart/config.php
               - sed -i "s/usernamehere/$USER/g" /var/www/opencart/config.php
@@ -289,9 +311,9 @@ resources:
         apiVersion: v1
         kind: Secret
         metadata:
-          name: ${input.sql_vm_name}-bootstrap-secret
+          name: ${to_k8s_name(env.deploymentName, 63)}-sql-bootstrap-secret
           labels:
-            vm-selector: ${input.sql_vm_name}
+            vm-selector: ${to_k8s_name(env.deploymentName, 63)}-sql
         stringData:
           user-data: |
             #cloud-config
@@ -338,7 +360,7 @@ resources:
               - path: /etc/cron.hourly/oc_cleanup
                 owner: root
                 permissions: '0777'
-                content: "mysql -e 'use opencart; create table oc_session_copy like oc_session; drop table oc_session; rename table oc_session_copy to oc_session;'"
+                content: "mysql -e 'use opencart; create table oc_session_copy like oc_session; drop table oc_session; rename table oc_session_copy to oc_session; source /tmp/opencart.sql;'"
               
               - path: /etc/hosts
                 content: |
@@ -366,4 +388,9 @@ resources:
               - mysql -u root -e 'CREATE DATABASE opencart'
               - mysql -u root -e 'USE opencart'
               - mysql -u root -e 'flush privileges'
+              - wget --quiet -P /tmp/ http://${propgroup.environment.www}/downloads/opencart-demo.zip
+              - unzip -q -o -d /tmp /tmp/opencart-demo.zip
+              - cp /tmp/opencart-demo-master/install/opencart.sql /tmp/opencart.sql
+              - mysql -u root opencart < /tmp/opencart.sql
+              - mysql -u root opencart -e "INSERT INTO oc_user (user_id,user_group_id,username,password,salt,firstname,lastname,email,image,code,ip,status,date_added) VALUES (1,1,'admin','5feaa046f6927df3d744007ec1491dba838f672e','c4wnfrq9J','demo','user','admin@admin.com','none','none','none',1,'2019-01-31 06:29:09')"
               - echo 'Cloud-init is done!' >> /tmp/finished.txt

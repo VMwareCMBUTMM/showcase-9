@@ -1,4 +1,4 @@
-version: 2
+version: 3
 formatVersion: 2
 name: Opencart VM Application
 description: Provision the Opencart application with a SQL and Apache VM
@@ -299,6 +299,11 @@ resources:
               - sed -i "s/dbiphere/$mysqlip/g" /var/www/opencart/admin/config.php
               - sed -i "s/usernamehere/$USER/g" /var/www/opencart/admin/config.php
               - sed -i "s/passwordhere/$PASS/g" /var/www/opencart/admin/config.php
+              - sed -i 's/error_reporting(E_ALL);/error_reporting(E_ALL \& ~E_DEPRECATED);/g' /var/www/opencart/system/startup.php
+              - sed -i 's/if (error_reporting() === 0) {/if (!(\$code \& error_reporting())) return true; if (error_reporting() === 0) {/g' /var/www/opencart/system/framework.php
+              - sed -i 's/if (error_reporting() === 0) {/if (!(\$code \& error_reporting())) return true; if (error_reporting() === 0) {/g' /var/www/opencart/catalog/controller/startup/error.php
+              - sed -i 's/if (error_reporting() === 0) {/if (!(\$code \& error_reporting())) return true; if (error_reporting() === 0) {/g' /var/www/opencart/admin/controller/startup/error.php
+              - sed -i 's/if (is_resource($this->image))/if (is_resource($this->image) || $this->image instanceof \\GdImage)/g' /var/www/opencart/system/library/image.php
               - systemctl reload apache2
               - systemctl restart apache2
               - echo 'Cloud-init is done!' >> /tmp/finished.txt

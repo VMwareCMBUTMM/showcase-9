@@ -10,7 +10,7 @@
 # ============================================================================
 formatVersion: 2
 name: The Bookstore App
-version: 6
+version: 7
 metadata:
   deploymentSettings:
     disableUpdateDay2Action: true

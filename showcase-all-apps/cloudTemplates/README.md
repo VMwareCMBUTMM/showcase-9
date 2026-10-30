@@ -24,6 +24,10 @@ The following are the `environment` constant property groups `string` variables.
 | nameserver1 | string | \<nameserver 1 IP\> |
 | nameserver2 | string | \<nameserver 2 IP\> |
 | ubuntu1804 | string | vmi-\<id\> |
+| ubuntu2404 | string | vmi-\<id\> |
 | www | string | \<webserver fqdn\> |
-
-
+| harbor | string | \<harbor fqdn\> |
+| k8s_cl | string | cl-\<id\> |
+| vksVersion | string | \<v1.3.6.4+vmware.2-vkr.3\> |
+| clusterClass | string | \<builtin-generic-v3.6.0\> |
+| vksContentLibraryId | string | cl-\<id\> |

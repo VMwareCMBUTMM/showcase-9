@@ -1,12 +1,26 @@
 formatVersion: 2
 name: Opencart Application
 description: Opencart Application with MySQL VM, VKS Cluster, Istio Ingress Gateway, cert-manager, and HTTPS sslip.io endpoint
-version: 1
+version: 2
 metadata:
   deploymentSettings:
-    disableUpdateDay2Action: true
+    disableUpdateDay2Action: false
     hideDisabledDay2Actions: true
 outputs:
+  # --- Standardized Automation Outputs ---
+  appType:
+    type: string
+    title: Application Type
+    value: opencart
+  lbIp:
+    type: string
+    title: Load Balancer Ingress IP
+    value: ${resource.Opencart_CM.object.data["ingress-ip"]}
+  cartUrl:
+    type: string
+    title: OpenCart Application HTTPS URL
+    value: ${resource.Opencart_CM.object.data["cart-url"]}
+  # ---------------------------------------
   __deploymentOverview:
     value: |-
       ## Opencart Shopping Cart Application
@@ -106,216 +120,121 @@ resources:
     properties:
       name: ${input.namespace}
       existing: true
-  VKS_Job_SA:
-    type: CCI.Supervisor.Resource
-    properties:
-      context: ${resource.Namespace.id}
-      manifest:
-        apiVersion: v1
-        kind: ServiceAccount
-        metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-vks-job-sa
-  MYSQL_VM:
+  CLUSTER:
     type: CCI.Supervisor.Resource
     dependsOn:
-      - BOOTSTRAP
+      - istio-addon
     properties:
       context: ${resource.Namespace.id}
+      wait:
+        conditions:
+          - type: ControlPlaneInitialized
+            status: 'True'
+          - type: TopologyReconciled
+            status: 'True'
+          - type: WorkersAvailable
+            status: 'True'
+          - type: AddonsReconciled
+            status: 'True'
+        fields:
+          - indicatesFailure: false
+            path: status.phase
+            value: Provisioned
+          - indicatesFailure: false
+            path: status.initialization.controlPlaneInitialized
+            value: 'true'
+          - indicatesFailure: false
+            path: status.initialization.infrastructureProvisioned
+            value: 'true'
       manifest:
-        apiVersion: vmoperator.vmware.com/v1alpha5
-        kind: VirtualMachine
+        apiVersion: cluster.x-k8s.io/v1beta2
+        kind: Cluster
         metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-oc-sql
+          name: ${to_k8s_name(env.deploymentName, 63)}
           labels:
-            vm-selector: ${to_k8s_name(env.deploymentName, 63)}-oc-sql
-            vm-lb-selector: ${to_k8s_name(env.deploymentName, 63)}-oc-sql
+            cluster.x-k8s.io/cluster-name: ${to_k8s_name(env.deploymentName, 63)}
         spec:
-          className: ${input.vm_size}
-          # Friendly image name: ubuntu-24.04-lts-noble-server-cloudimg-amd64
-          imageName: ${propgroup.environment.ubuntu2404}
-          storageClass: ${input.storageclass}
-          powerState: PoweredOn
-          network:
-            domainName: ${propgroup.environment.domain}
-            nameservers:
-              - ${propgroup.environment.nameserver1}
-              - ${propgroup.environment.nameserver2}
-            searchDomains:
-              - ${propgroup.environment.domain}
-          bootstrap:
-            cloudInit:
-              rawCloudConfig:
-                name: ${to_k8s_name(env.deploymentName, 63)}-oc-sql-bootstrap-secret
-                key: user-data
-  BOOTSTRAP:
-    type: CCI.Supervisor.Resource
-    properties:
-      context: ${resource.Namespace.id}
-      manifest:
-        apiVersion: v1
-        kind: Secret
-        metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-oc-sql-bootstrap-secret
-          labels:
-            vm-selector: ${to_k8s_name(env.deploymentName, 63)}-oc-sql
-        stringData:
-          user-data: |
-            #cloud-config
-            hostname: ${self.resourceName}
-            package_update: true
-            package_upgrade: true
-
-            packages:
-              - mysql-server
-              - mysql-client-core-8.0
-              - unzip
-              - open-vm-tools
-
-            ssh_pwauth: true
-
-            users:
-              - name: ${input.username}
-                lock_passwd: false
-                sudo: ALL=(ALL) NOPASSWD:ALL
-                groups: wheel, sudo, admin
-                shell: /bin/bash
-
-              - name: ocuser
-                sudo: ['ALL=(ALL) NOPASSWD:ALL']
-                groups: sudo
-                shell: /bin/bash
-
-            chpasswd:
-              expire: false
-              users:
-                - name: ${input.username}
-                  password: ${input.password}
-                  type: text
-                  
-                - name: ocuser
-                  password: ${input.password}
-                  type: text
-              
-            write_files:
-              - path: /root/.my.cnf
-                owner: root:root
-                permissions: '0600'
-                content: |
-                  [client]
-                  user=root
-                  password="${input.password}"
-
-              - path: /etc/mysql/conf.d/client.cnf
-                owner: root:root
-                permissions: '0600'
-                content: |
-                  [client]
-                  user=root
-                  password="${input.password}"
-
-              - path: /etc/cron.hourly/oc_cleanup
-                owner: root:root
-                permissions: '0755'
-                content: "mysql -e 'use opencart; create table oc_session_copy like oc_session; drop table oc_session; rename table oc_session_copy to oc_session;'"
-              
-              - path: /etc/hosts
-                content: |
-                  127.0.0.1 ${to_k8s_name(env.deploymentName, 63)}-oc-sql
-                  185.125.190.82 security.ubuntu.com
-                  185.125.190.82 archive.ubuntu.com
-                append: true
-
-            runcmd:
-              - systemctl enable --now mysql
-              - |
-                export HOME=/root
-                set -e
-
-                # Configure root password
-                mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${input.password}'; FLUSH PRIVILEGES;"
-
-                # Allow remote MySQL connections
-                sed -i "s/^[[:space:]]*bind-address[[:space:]]*=.*/bind-address = 0.0.0.0/" /etc/mysql/mysql.conf.d/mysqld.cnf
-
-                # Disable MySQL TLS.
-                # Required for the OpenCart MariaDB client used by this blueprint.
-                if ! grep -q "^[[:space:]]*skip_ssl" /etc/mysql/mysql.conf.d/mysqld.cnf; then
-                    sed -i "/^\[mysqld\]/a skip_ssl" /etc/mysql/mysql.conf.d/mysqld.cnf
-                fi
-
-                systemctl restart mysql
-
-                # Create OpenCart database user and database
-                mysql -u root -p"${input.password}" -e "CREATE USER IF NOT EXISTS 'ocuser'@'%' IDENTIFIED BY '${input.password}';"
-                mysql -u root -p"${input.password}" -e "GRANT ALL PRIVILEGES ON *.* TO 'ocuser'@'%' WITH GRANT OPTION; FLUSH PRIVILEGES;"
-                mysql -u root -p"${input.password}" -e "CREATE DATABASE IF NOT EXISTS opencart;"
-
-                echo "Cloud-init is done!" >> /tmp/finished.txt
-  CM_Role:
+          clusterNetwork:
+            pods:
+              cidrBlocks:
+                - 10.95.0.0/16
+            services:
+              cidrBlocks:
+                - 10.96.0.0/12
+            serviceDomain: cluster.local
+          topology:
+            classRef:
+              name: ${propgroup.environment.clusterClass}
+              namespace: vmware-system-vks-public
+            version: ${propgroup.environment.vksVersion}
+            variables:
+              - name: vmClass
+                value: ${input.vm_size}
+              - name: storageClass
+                value: ${input.storageclass}
+              - name: kubernetes
+                value:
+                  security:
+                    podSecurityStandard:
+                      audit: restricted
+                      enforce: privileged
+                      warn: restricted
+              - name: vsphereOptions
+                value:
+                  persistentVolumes:
+                    availableStorageClasses:
+                      - ${input.storageclass}
+                    defaultStorageClass: ${input.storageclass}
+            controlPlane:
+              replicas: ${input.controlPlaneCount}
+              metadata:
+                annotations:
+                  run.tanzu.vmware.com/resolve-os-image: os-name=photon, content-library=${propgroup.environment.vksContentLibraryId}
+            workers:
+              machineDeployments:
+                - class: node-pool
+                  name: ${to_k8s_name(env.deploymentName, 63)}-np
+                  metadata:
+                    annotations:
+                      cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: ${input.maxWorkerCount}
+                      cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size: ${input.minWorkerCount}
+                      run.tanzu.vmware.com/resolve-os-image: os-name=photon, content-library=${propgroup.environment.vksContentLibraryId}
+  VKS_Bootstrap:
     type: CCI.Supervisor.Resource
     dependsOn:
-      - VKS_Job_SA
+      - CLUSTER
+    createTimeout: 45m
     properties:
       context: ${resource.Namespace.id}
+      existing: true
       manifest:
-        apiVersion: rbac.authorization.k8s.io/v1
-        kind: Role
+        apiVersion: run.tanzu.vmware.com/v1alpha3
+        kind: ClusterBootstrap
         metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager
-        rules:
-          - apiGroups:
-              - ''
-            resources:
-              - configmaps
-            verbs:
-              - get
-              - list
-              - watch
-              - create
-              - delete
-              - patch
-  SSH_MYSQL_LB:
-    type: CCI.Supervisor.Resource
-    dependsOn:
-      - MYSQL_VM
-    properties:
-      context: ${resource.Namespace.id}
-      manifest:
-        apiVersion: vmoperator.vmware.com/v1alpha5
-        kind: VirtualMachineService
-        metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-oc-sql
-        spec:
-          selector:
-            vm-lb-selector: ${to_k8s_name(env.deploymentName, 63)}-oc-sql
-          type: LoadBalancer
-          ports:
-            - name: ssh
-              protocol: TCP
-              port: 22
-              targetPort: 22
-            - name: mysql
-              protocol: TCP
-              port: 3306
-              targetPort: 3306
-  CM_Role_Binding:
-    type: CCI.Supervisor.Resource
-    dependsOn:
-      - CM_Role
-    properties:
-      context: ${resource.Namespace.id}
-      manifest:
-        apiVersion: rbac.authorization.k8s.io/v1
-        kind: RoleBinding
-        metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager-binding
-        subjects:
-          - kind: ServiceAccount
-            name: ${to_k8s_name(env.deploymentName, 63)}-vks-job-sa
-        roleRef:
-          kind: Role
-          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager
-          apiGroup: rbac.authorization.k8s.io
+          name: ${to_k8s_name(env.deploymentName, 63)}
+      wait:
+        conditions:
+          - indicatesFailure: false
+            status: 'True'
+            type: Guest-Cluster-Auth-Service-ReconcileSucceeded
+          - indicatesFailure: false
+            status: 'True'
+            type: Kapp-Controller-ReconcileSucceeded
+          - indicatesFailure: false
+            status: 'True'
+            type: Metrics-Server-ReconcileSucceeded
+          - indicatesFailure: false
+            status: 'True'
+            type: Pinniped-ReconcileSucceeded
+          - indicatesFailure: false
+            status: 'True'
+            type: Secretgen-Controller-ReconcileSucceeded
+          - indicatesFailure: false
+            status: 'True'
+            type: Vsphere-Cpi-ReconcileSucceeded
+          - indicatesFailure: false
+            status: 'True'
+            type: Vsphere-Pv-Csi-ReconcileSucceeded
   VKS_Job:
     type: CCI.Supervisor.Resource
     dependsOn:
@@ -357,8 +276,6 @@ resources:
                     - '-c'
                   args:
                     - |
-
-                      # Function to set KUBECONFIG to VKS KubeConfig
                       set_vks_kubeconfig() {
                         export KUBECONFIG=/etc/vks-kubeconfig/vks-cluster-kubeconfig-admin
                         echo "Waiting for VKS cluster API server to respond..."
@@ -368,82 +285,54 @@ resources:
                         done
                         echo "Success: VKS Kubeconfig retrieved and cluster is responding"
                       }
-
-                      # Call the set_vks_kubeconfig() function
                       set_vks_kubeconfig
 
-                      # create and patch the opencart namespace pod-security inside VKS cluster
-                      #=======================================
                       kubectl get ns opencart >/dev/null 2>&1 || kubectl create namespace opencart
-
-                      #Patch the namespace with a pod-security privileged label
-                      #=======================================
                       kubectl label ns opencart pod-security.kubernetes.io/enforce=privileged --overwrite
 
-                      # Wait for cert-manager to be fully ready
-                      #=======================================
                       echo "Waiting for cert-manager to become fully ready..."
                       until kubectl get crd certificates.cert-manager.io clusterissuers.cert-manager.io >/dev/null 2>&1; do
-                        echo "Waiting for cert-manager CRDs to be created..."
                         sleep 5
                       done
                       kubectl wait --for=condition=Established crd/certificates.cert-manager.io crd/clusterissuers.cert-manager.io --timeout=10m
 
                       until kubectl get deployment/cert-manager deployment/cert-manager-cainjector deployment/cert-manager-webhook -n cert-manager >/dev/null 2>&1; do
-                        echo "Waiting for cert-manager deployments..."
                         sleep 5
                       done
                       kubectl wait --for=condition=Available deployment/cert-manager deployment/cert-manager-cainjector deployment/cert-manager-webhook -n cert-manager --timeout=10m
                       echo "Success: cert-manager is ready"
 
-                      # Wait for Gateway API and Istio to be ready
-                      #=======================================
                       echo "Waiting for Gateway API to become ready..."
                       until kubectl get crd gateways.gateway.networking.k8s.io httproutes.gateway.networking.k8s.io >/dev/null 2>&1; do
-                        echo "Waiting for Gateway API CRDs..."
                         sleep 5
                       done
                       kubectl wait --for=condition=Established crd/gateways.gateway.networking.k8s.io crd/httproutes.gateway.networking.k8s.io --timeout=10m
-                      echo "Success: Gateway API CRDs are ready"
 
                       echo "Waiting for Istio to become ready..."
                       until kubectl get deployment/istiod -n istio-system >/dev/null 2>&1; do
-                        echo "Waiting for istiod deployment..."
                         sleep 5
                       done
                       kubectl wait --for=condition=Available deployment/istiod -n istio-system --timeout=10m
-                      echo "Success: istiod is ready"
 
-                      # Helper function to apply manifests with retries
-                      #=======================================
                       apply_with_retry() {
                         local desc="$1"
                         local manifest="$2"
                         local max_attempts=15
                         local delay=5
                         local attempt=1
-                        echo "Applying $desc..."
                         while [ $attempt -le $max_attempts ]; do
                           if echo "$manifest" | kubectl apply -f -; then
                             echo "Success: $desc applied"
                             return 0
                           fi
-                          echo "Warning: Failed to apply $desc (attempt $attempt/$max_attempts). Retrying in $delay s..."
                           sleep $delay
                           attempt=$((attempt + 1))
                         done
-                        echo "Failure: Timed out applying $desc"
                         exit 1
                       }
 
-                      # Allow webhook endpoints 10s to fully register with API server
-                      #=======================================
-                      echo "Waiting 10s for admission webhooks to settle..."
                       sleep 10
 
-                      # Configure containerd skip_verify for Harbor
-                      #=======================================
-                      echo "Configuring containerd skip_verify for Harbor (${propgroup.environment.harbor})..."
                       cat <<EOF | kubectl apply -f -
                       apiVersion: apps/v1
                       kind: DaemonSet
@@ -474,7 +363,6 @@ resources:
                                   - |
                                     mkdir -p /etc/containerd/certs.d/${propgroup.environment.harbor}
                                     printf 'server = "https://${propgroup.environment.harbor}"\n\n[host."https://${propgroup.environment.harbor}"]\n  capabilities = ["pull", "resolve"]\n  skip_verify = true\n' > /etc/containerd/certs.d/${propgroup.environment.harbor}/hosts.toml
-                                    echo "Configured skip_verify for ${propgroup.environment.harbor}"
                                     sleep infinity
                                 volumeMounts:
                                   - name: containerd-certs
@@ -486,12 +374,8 @@ resources:
                                   type: DirectoryOrCreate
                       EOF
 
-                      echo "Waiting for containerd trust DaemonSet to rollout..."
                       kubectl rollout status daemonset/containerd-harbor-trust -n kube-system --timeout=120s
 
-
-                      # Create self-signed ClusterIssuer for OpenCart
-                      #=======================================
                       apply_with_retry "ClusterIssuer opencart-issuer" "
                       apiVersion: cert-manager.io/v1
                       kind: ClusterIssuer
@@ -501,8 +385,6 @@ resources:
                         selfSigned: {}
                       "
 
-                      # Create Istio Gateway for OpenCart (HTTP & HTTPS)
-                      #=======================================
                       apply_with_retry "Gateway opencart-gateway" "
                       apiVersion: gateway.networking.k8s.io/v1
                       kind: Gateway
@@ -534,15 +416,10 @@ resources:
                                   name: opencart-tls
                       "
 
-                      # Wait for Istio Gateway to receive an External LoadBalancer IP
-                      #=======================================
-                      echo "Waiting for Istio Gateway External IP..."
                       timeout=300
                       elapsed=0
                       while [ -z "$(kubectl get svc opencart-gateway-istio -n opencart -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)" ]; do
                         if [ $elapsed -ge $timeout ]; then
-                          echo "Failure: Timed out waiting for Istio Gateway IP"
-                          kubectl get svc -n opencart
                           exit 1
                         fi
                         sleep 5
@@ -551,11 +428,7 @@ resources:
 
                       INGRESS_IP=$(kubectl get svc opencart-gateway-istio -n opencart -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
                       OPENCART_DOMAIN="opencart.$INGRESS_IP.sslip.io"
-                      echo "Success: Istio Gateway IP is: $INGRESS_IP"
-                      echo "Success: OpenCart domain is: $OPENCART_DOMAIN"
 
-                      # Issue Certificate for the domain
-                      #=======================================
                       apply_with_retry "Certificate opencart-tls" "
                       apiVersion: cert-manager.io/v1
                       kind: Certificate
@@ -571,12 +444,8 @@ resources:
                         secretName: opencart-tls
                       "
 
-                      echo "Waiting for Certificate opencart-tls to be issued..."
                       kubectl wait --for=condition=Ready certificate/opencart-tls -n opencart --timeout=5m
-                      echo "Success: Certificate opencart-tls is issued"
 
-                      # Create Backend ClusterIP Service for OpenCart
-                      #=======================================
                       apply_with_retry "Service my-open-cart-svc" "
                       apiVersion: v1
                       kind: Service
@@ -602,8 +471,6 @@ resources:
                           app.kubernetes.io/name: opencart
                       "
 
-                      # Create HTTPRoute pointing to OpenCart Service
-                      #=======================================
                       apply_with_retry "HTTPRoute opencart-route" "
                       apiVersion: gateway.networking.k8s.io/v1
                       kind: HTTPRoute
@@ -631,21 +498,18 @@ resources:
                                   value: /
                       "
 
-                      # Create endpoints ConfigMap on the Supervisor Namespace
-                      #============================================================= 
+                      # --- ConfigMap Creation in Supervisor Namespace ---
                       unset KUBECONFIG
                       kubectl create configmap ${to_k8s_name(env.deploymentName, 63)}-opencart-endpoints \
                         --from-literal=ingress-ip=$INGRESS_IP \
                         --from-literal=cart-url=https://$OPENCART_DOMAIN \
                         --from-literal=cart-http-url=http://$OPENCART_DOMAIN \
+                        --from-literal=appType=opencart \
                         --dry-run=client -o yaml | kubectl apply -f -
-                      echo "Success: Created ConfigMap ${to_k8s_name(env.deploymentName, 63)}-opencart-endpoints in supervisor namespace"
+                      # --------------------------------------------------
 
-                      # Re-set KUBECONFIG to VKS guest cluster
                       set_vks_kubeconfig
 
-                      # Create PVC for OpenCart
-                      #=======================================
                       cat <<EOF | kubectl create -f -
                       apiVersion: v1
                       kind: PersistentVolumeClaim
@@ -664,8 +528,6 @@ resources:
                         storageClassName: ${input.storageclass}
                       EOF
 
-                      # Create Opencart Password Secret
-                      #=======================================
                       cat <<EOF | kubectl create -f -
                       apiVersion: v1
                       data:
@@ -680,8 +542,6 @@ resources:
                       type: Opaque
                       EOF
 
-                      # Create MariaDB Password Secret
-                      #=======================================
                       cat <<EOF | kubectl create -f -
                       apiVersion: v1
                       data:
@@ -696,8 +556,6 @@ resources:
                       type: Opaque
                       EOF
 
-                      # Create Frontend Web Deployment with HTTPS enabled
-                      #=======================================
                       cat <<EOF | kubectl create -f -
                       apiVersion: apps/v1
                       kind: Deployment
@@ -727,8 +585,6 @@ resources:
                               app.kubernetes.io/instance: my-open-cart
                               app.kubernetes.io/name: opencart
                           spec:
-                            #imagePullSecrets:
-                            #  - name: regcred
                             affinity:
                               podAntiAffinity:
                                 preferredDuringSchedulingIgnoredDuringExecution:
@@ -859,24 +715,7 @@ resources:
                                   claimName: open-cart-pvc
                       EOF
 
-                      # Wait for OpenCart deployment to become ready
-                      #=======================================
-                      echo "Waiting for OpenCart deployment to become ready..."
                       kubectl rollout status deployment/my-open-cart-app -n opencart --timeout=1200s
-                      if [ $? -ne 0 ]; then
-                        echo "Failure: OpenCart deployment failed to become ready"
-                        echo "=== Pods ==="
-                        kubectl get pods -n opencart -o wide
-                        echo "=== Pod Describe ==="
-                        kubectl describe pods -n opencart
-                        echo "=== PersistentVolumeClaims ==="
-                        kubectl get pvc -n opencart
-                        echo "=== Recent Events ==="
-                        kubectl get events -n opencart --sort-by='.metadata.creationTimestamp'
-                        exit 1
-                      else
-                        echo "Success: OpenCart deployment is ready"
-                      fi
               restartPolicy: Never
               volumes:
                 - name: cluster-kubeconfig-volume
@@ -894,91 +733,6 @@ resources:
           - indicatesFailure: true
             path: status.failed
             value: '1'
-  VKS_Bootstrap:
-    type: CCI.Supervisor.Resource
-    dependsOn:
-      - CLUSTER
-    createTimeout: 45m
-    properties:
-      context: ${resource.Namespace.id}
-      existing: true
-      manifest:
-        apiVersion: run.tanzu.vmware.com/v1alpha3
-        kind: ClusterBootstrap
-        metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}
-      wait:
-        conditions:
-          - indicatesFailure: false
-            status: 'True'
-            type: Guest-Cluster-Auth-Service-ReconcileSucceeded
-          - indicatesFailure: false
-            status: 'True'
-            type: Kapp-Controller-ReconcileSucceeded
-          - indicatesFailure: false
-            status: 'True'
-            type: Metrics-Server-ReconcileSucceeded
-          - indicatesFailure: false
-            status: 'True'
-            type: Pinniped-ReconcileSucceeded
-          - indicatesFailure: false
-            status: 'True'
-            type: Secretgen-Controller-ReconcileSucceeded
-          - indicatesFailure: false
-            status: 'True'
-            type: Vsphere-Cpi-ReconcileSucceeded
-          - indicatesFailure: false
-            type: Vsphere-Pv-Csi-ReconcileSucceeded
-            status: 'True'
-  cert-manager-addon:
-    type: CCI.Supervisor.Resource
-    dependsOn:
-      - CM_Role_Binding
-    properties:
-      context: ${resource.Namespace.id}
-      manifest:
-        apiVersion: addons.kubernetes.vmware.com/v1alpha1
-        kind: AddonInstall
-        metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-cert-manager
-        spec:
-          addonRef:
-            name: cert-manager
-          clusters:
-            - selector:
-                matchLabels:
-                  cluster.x-k8s.io/cluster-name: ${to_k8s_name(env.deploymentName, 63)}
-  Opencart_CM:
-    type: CCI.Supervisor.Resource
-    dependsOn:
-      - VKS_Job
-    properties:
-      existing: true
-      context: ${resource.Namespace.id}
-      manifest:
-        apiVersion: v1
-        kind: ConfigMap
-        metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-opencart-endpoints
-  istio-secret:
-    type: CCI.Supervisor.Resource
-    dependsOn:
-      - cert-manager-addon
-    properties:
-      context: ${resource.Namespace.id}
-      manifest:
-        apiVersion: v1
-        kind: Secret
-        metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}-istio-values
-        stringData:
-          values.yaml: |
-            #@data/values
-            #@overlay/match-child-defaults missing_ok=True
-            ---
-            gateways:
-              ingress:
-                enabled: true
   istio-addon:
     type: CCI.Supervisor.Resource
     dependsOn:
@@ -1000,82 +754,258 @@ resources:
             - selector:
                 matchLabels:
                   cluster.x-k8s.io/cluster-name: ${to_k8s_name(env.deploymentName, 63)}
-  CLUSTER:
+  istio-secret:
     type: CCI.Supervisor.Resource
     dependsOn:
-      - istio-addon
+      - cert-manager-addon
     properties:
       context: ${resource.Namespace.id}
-      wait:
-        conditions:
-          - type: ControlPlaneInitialized
-            status: 'True'
-          - type: TopologyReconciled
-            status: 'True'
-          - type: WorkersAvailable
-            status: 'True'
-          - type: AddonsReconciled
-            status: 'True'
-        fields:
-          - indicatesFailure: false
-            path: status.phase
-            value: Provisioned
-          - indicatesFailure: false
-            path: status.initialization.controlPlaneInitialized
-            value: 'true'
-          - indicatesFailure: false
-            path: status.initialization.infrastructureProvisioned
-            value: 'true'
       manifest:
-        apiVersion: cluster.x-k8s.io/v1beta2
-        kind: Cluster
+        apiVersion: v1
+        kind: Secret
         metadata:
-          name: ${to_k8s_name(env.deploymentName, 63)}
+          name: ${to_k8s_name(env.deploymentName, 63)}-istio-values
+        stringData:
+          values.yaml: |
+            #@data/values
+            #@overlay/match-child-defaults missing_ok=True
+            ---
+            pilot:
+              podDisruptionBudget:
+                enabled: false
+            gateways:
+              ingress:
+                enabled: true
+  Opencart_CM:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - VKS_Job
+    properties:
+      existing: true
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-opencart-endpoints
+  VKS_Job_SA:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-vks-job-sa
+  BOOTSTRAP:
+    type: CCI.Supervisor.Resource
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-oc-sql-bootstrap-secret
           labels:
-            cluster.x-k8s.io/cluster-name: ${to_k8s_name(env.deploymentName, 63)}
+            vm-selector: ${to_k8s_name(env.deploymentName, 63)}-oc-sql
+        stringData:
+          user-data: |
+            #cloud-config
+            hostname: ${self.resourceName}
+            package_update: true
+            package_upgrade: true
+
+            packages:
+              - mysql-server
+              - mysql-client-core-8.0
+              - unzip
+              - open-vm-tools
+
+            ssh_pwauth: true
+
+            users:
+              - name: ${input.username}
+                lock_passwd: false
+                sudo: ALL=(ALL) NOPASSWD:ALL
+                groups: wheel, sudo, admin
+                shell: /bin/bash
+
+              - name: ocuser
+                sudo: ['ALL=(ALL) NOPASSWD:ALL']
+                groups: sudo
+                shell: /bin/bash
+
+            chpasswd:
+              expire: false
+              users:
+                - name: ${input.username}
+                  password: ${input.password}
+                  type: text
+                  
+                - name: ocuser
+                  password: ${input.password}
+                  type: text
+              
+            write_files:
+              - path: /root/.my.cnf
+                owner: root:root
+                permissions: '0600'
+                content: |
+                  [client]
+                  user=root
+                  password="${input.password}"
+
+              - path: /etc/mysql/conf.d/client.cnf
+                owner: root:root
+                permissions: '0600'
+                content: |
+                  [client]
+                  user=root
+                  password="${input.password}"
+
+              - path: /etc/cron.hourly/oc_cleanup
+                owner: root:root
+                permissions: '0755'
+                content: "mysql -e 'use opencart; create table oc_session_copy like oc_session; drop table oc_session; rename table oc_session_copy to oc_session;'"
+              
+              - path: /etc/hosts
+                content: |
+                  127.0.0.1 ${to_k8s_name(env.deploymentName, 63)}-oc-sql
+                  185.125.190.82 security.ubuntu.com
+                  185.125.190.82 archive.ubuntu.com
+                append: true
+
+            runcmd:
+              - systemctl enable --now mysql
+              - |
+                export HOME=/root
+                set -e
+
+                mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${input.password}'; FLUSH PRIVILEGES;"
+                sed -i "s/^[[:space:]]*bind-address[[:space:]]*=.*/bind-address = 0.0.0.0/" /etc/mysql/mysql.conf.d/mysqld.cnf
+
+                if ! grep -q "^[[:space:]]*skip_ssl" /etc/mysql/mysql.conf.d/mysqld.cnf; then
+                    sed -i "/^\[mysqld\]/a skip_ssl" /etc/mysql/mysql.conf.d/mysqld.cnf
+                fi
+
+                systemctl restart mysql
+
+                mysql -u root -p"${input.password}" -e "CREATE USER IF NOT EXISTS 'ocuser'@'%' IDENTIFIED BY '${input.password}';"
+                mysql -u root -p"${input.password}" -e "GRANT ALL PRIVILEGES ON *.* TO 'ocuser'@'%' WITH GRANT OPTION; FLUSH PRIVILEGES;"
+                mysql -u root -p"${input.password}" -e "CREATE DATABASE IF NOT EXISTS opencart;"
+
+                echo "Cloud-init is done!" >> /tmp/finished.txt
+  MYSQL_VM:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - BOOTSTRAP
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: vmoperator.vmware.com/v1alpha5
+        kind: VirtualMachine
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-oc-sql
+          labels:
+            vm-selector: ${to_k8s_name(env.deploymentName, 63)}-oc-sql
+            vm-lb-selector: ${to_k8s_name(env.deploymentName, 63)}-oc-sql
         spec:
-          clusterNetwork:
-            pods:
-              cidrBlocks:
-                - 10.95.0.0/16
-            services:
-              cidrBlocks:
-                - 10.96.0.0/12
-            serviceDomain: cluster.local
-          topology:
-            classRef:
-              name: ${propgroup.environment.clusterClass}
-              namespace: vmware-system-vks-public
-            version: ${propgroup.environment.vksVersion}
-            variables:
-              - name: vmClass
-                value: ${input.vm_size}
-              - name: storageClass
-                value: ${input.storageclass}
-              - name: kubernetes
-                value:
-                  security:
-                    podSecurityStandard:
-                      audit: restricted
-                      enforce: privileged
-                      warn: restricted
-              - name: vsphereOptions
-                value:
-                  persistentVolumes:
-                    availableStorageClasses:
-                      - ${input.storageclass}
-                    defaultStorageClass: ${input.storageclass}
-            controlPlane:
-              replicas: ${input.controlPlaneCount}
-              metadata:
-                annotations:
-                  run.tanzu.vmware.com/resolve-os-image: os-name=photon, content-library=${propgroup.environment.vksContentLibraryId}
-            workers:
-              machineDeployments:
-                - class: node-pool
-                  name: ${to_k8s_name(env.deploymentName, 63)}-np
-                  metadata:
-                    annotations:
-                      cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: ${input.maxWorkerCount}
-                      cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size: ${input.minWorkerCount}
-                      run.tanzu.vmware.com/resolve-os-image: os-name=photon, content-library=${propgroup.environment.vksContentLibraryId}
+          className: ${input.vm_size}
+          imageName: ${propgroup.environment.ubuntu2404}
+          storageClass: ${input.storageclass}
+          powerState: PoweredOn
+          network:
+            domainName: ${propgroup.environment.domain}
+            nameservers:
+              - ${propgroup.environment.nameserver1}
+              - ${propgroup.environment.nameserver2}
+            searchDomains:
+              - ${propgroup.environment.domain}
+          bootstrap:
+            cloudInit:
+              rawCloudConfig:
+                name: ${to_k8s_name(env.deploymentName, 63)}-oc-sql-bootstrap-secret
+                key: user-data
+  SSH_MYSQL_LB:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - MYSQL_VM
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: vmoperator.vmware.com/v1alpha5
+        kind: VirtualMachineService
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-oc-sql
+        spec:
+          selector:
+            vm-lb-selector: ${to_k8s_name(env.deploymentName, 63)}-oc-sql
+          type: LoadBalancer
+          ports:
+            - name: ssh
+              protocol: TCP
+              port: 22
+              targetPort: 22
+            - name: mysql
+              protocol: TCP
+              port: 3306
+              targetPort: 3306
+  cert-manager-addon:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - CM_Role_Binding
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: addons.kubernetes.vmware.com/v1alpha1
+        kind: AddonInstall
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-cert-manager
+        spec:
+          addonRef:
+            name: cert-manager
+          clusters:
+            - selector:
+                matchLabels:
+                  cluster.x-k8s.io/cluster-name: ${to_k8s_name(env.deploymentName, 63)}
+  CM_Role_Binding:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - CM_Role
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager-binding
+        subjects:
+          - kind: ServiceAccount
+            name: ${to_k8s_name(env.deploymentName, 63)}-vks-job-sa
+        roleRef:
+          kind: Role
+          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager
+          apiGroup: rbac.authorization.k8s.io
+  CM_Role:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - VKS_Job_SA
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: Role
+        metadata:
+          name: ${to_k8s_name(env.deploymentName, 63)}-configmap-manager
+        rules:
+          - apiGroups:
+              - ''
+            resources:
+              - configmaps
+            verbs:
+              - get
+              - list
+              - watch
+              - create
+              - delete
+              - patch

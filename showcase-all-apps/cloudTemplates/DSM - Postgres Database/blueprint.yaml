@@ -1,0 +1,246 @@
+formatVersion: 2
+name: Postgres Database
+description: Deploy a Postgres database with the DSM service
+version: 1
+metadata:
+  deploymentSettings:
+    disableUpdateDay2Action: false
+    hideDisabledDay2Actions: true
+outputs:
+  __deploymentOverview:
+    value: |-
+      ##  Database Deployment Details
+
+      ### **Connection Info**
+      * **Host:** ${resource.Postgres_DB.object.status.connection.host}
+      * **Port:** ${resource.Postgres_DB.object.status.connection.port}
+      * **Username:** ${resource.Postgres_DB.object.status.connection.username}
+      * **Database:** ${resource.Postgres_DB.object.status.connection.dbname}
+
+      ### **Deployment Spec**
+      * **Storage Policy:** ${resource.Postgres_DB.object.spec.storagePolicyName}
+      * **Infrastructure policy:** ${resource.Postgres_DB.object.spec.infrastructurePolicy.name}
+      * **Postgres Version:** ${resource.Postgres_DB.object.status.upgradeStatus.currentVersion}
+      * **Deployment Topology:** ${input.topology == 1 ? "Single Server" : "vSphere Cluster HA / Multi-Node"}
+      * **Requested Memory:** ${resource.Postgres_DB.object.spec.requestedSharedMemorySize}
+      * **Storage space:** ${resource.Postgres_DB.object.spec.storageSpace}
+      * **VM Class:** ${resource.Postgres_DB.object.spec.vmClass.name}
+      * **Automated Backups:** ${input.enable_backups ? "Enabled" : "Disabled"}
+      * **Maintenance Window:** ${input.enable_maintenance ? "Enabled" : "Disabled"}
+inputs:
+############################################
+# Dynamic Data Retrieval for Known objects #
+############################################
+  namespace:
+    type: string
+    title: Namespace
+    $data: /data/namespaces
+  db_size:
+    type: string
+    title: Virtual Machine Class
+    default: best-effort-large
+    $data: /data/virtualmachineclasses?namespace={{namespace}}
+#removed since dsm does not accept the k8s compliant name
+#  storageclass:
+#    type: string
+#    title: Storage Class
+#    $data: /data/storageclasses?namespace={{namespace}}
+#############################################
+  db_name:
+    type: string
+    title: Database Name
+    description: Enter a name for the Database
+    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+    maxLength: 63
+    minLength: 1
+  db_username:
+    type: string
+    title: Database Admin Account Username
+    description: Database Admin username
+    default: pgadmin
+    pattern: '[a-z0-9A-Z@#$]+'
+  db_password:
+    type: string
+    title: Database Admin Account Password
+    description: Database Admin password
+    default: pgpass
+    pattern: '[a-z0-9A-Z@#$]+'
+    encrypted: true
+  dsm_policy:
+    type: string
+    title: DSM Infra Policy
+    description: DSM Infrastructure Policy
+    default: databases-x3skg
+    oneOf:
+      - title: Namespace-Managed
+        const: databases-x3skg
+  db_disk:
+    type: integer
+    title: Database Disk Size (Gi)
+    description: Select a Database Disk Size (20Gi - 100Gi)
+    default: 20
+    minimum: 20
+    maximum: 100
+  db_version:
+    type: string
+    title: Database Version
+    description: Select a database version
+    default: 18.4+vmware.v9.1.1.0
+    oneOf:
+      - title: 18.4
+        const: 18.4+vmware.v9.1.1.0
+      - title: 17.1
+        const: 17.10+vmware.v9.1.1.0
+      - title: 16.14
+        const: 16.14+vmware.v9.1.1.0
+  topology:
+    type: integer
+    title: Deployment Topology
+    description: Select the clustering architecture for your Postgres database
+    default: 0
+    oneOf:
+      - title: Single Server
+        const: 0
+      - title: Single vSphere Cluster HA or Single Zone HA
+        const: 1
+  enable_backups:
+    type: boolean
+    title: Enable Automated Backups
+    description: Toggle to enable or disable automated database scheduling
+    default: true
+  backup_retention:
+    type: integer
+    title: Backup Retention Period (Days)
+    description: Number of days to retain automated database backups
+    default: 3
+    minimum: 1
+    maximum: 90
+  enable_maintenance:
+    type: boolean
+    title: Enable Maintenance Window
+    description: Toggle to enforce a strict schedule for automated platform patches
+    default: true
+  maint_day:
+    type: string
+    title: Maintenance Day
+    description: Day of the week for the maintenance window
+    default: SATURDAY
+    oneOf:
+      - title: Monday
+        const: MONDAY
+      - title: Tuesday
+        const: TUESDAY
+      - title: Wednesday
+        const: WEDNESDAY
+      - title: Thursday
+        const: THURSDAY
+      - title: Friday
+        const: FRIDAY
+      - title: Saturday
+        const: SATURDAY
+      - title: Sunday
+        const: SUNDAY
+  maint_start_time:
+    type: string
+    title: Maintenance Start Time
+    description: Window start time in 24-hour HH:MM format (UTC)
+    default: '23:59'
+    pattern: ^(\d|2[0-3]):?([0-5]\d)$
+  maint_duration:
+    type: string
+    title: Maintenance Duration (Hours)
+    description: Duration of the maintenance window in hours
+    default: 6h0m0s
+    oneOf:
+      - title: 1 Hours
+        const: 1h0m0s
+      - title: 6 Hours
+        const: 6h0m0s
+      - title: 12 Hours
+        const: 12h0m0s
+resources:
+  Namespace:
+    type: CCI.Supervisor.Namespace
+    properties:
+      name: ${input.namespace}
+      existing: true
+  Postgres_DB:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - Secret
+      - DSM_DB_Config
+      - Namespace
+    properties:
+      context: ${resource.Namespace.id}
+      wait:
+        conditions:
+          - type: Ready
+            status: 'True'
+          - status: 'True'
+            type: TerminalFailure
+            indicatesFailure: true
+      manifest:
+        apiVersion: databases.dataservices.vmware.com/v1alpha1
+        kind: PostgresCluster
+        spec:
+          adminUsername: ${input.db_username}
+          databaseName: ${to_lower(input.db_name)}
+          version: ${input.db_version}
+          storageSpace: ${input.db_disk}Gi
+          storagePolicyName: lvn-w01b-cl01 - Optimal Datastore Default Policy - RAID1
+          infrastructurePolicy:
+            name: ${input.dsm_policy}
+          replicas: ${input.topology}
+          vmClass:
+            name: ${input.db_size}
+          databaseConfig:
+            name: ${to_lower(input.db_name)}-db-config
+          adminPasswordRef:
+            name: ${to_lower(input.db_name)}-secret
+          backupLocation: '${input.enable_backups ? { ''name'': ''database-backups'' } :null}'
+          backupConfig: |-
+            ${input.enable_backups ? {
+              'backupRetentionDays': input.backup_retention,
+              'schedules': [
+                { 'name': 'default-full-backup', 'schedule': '0 2 * * *', 'type': 'full' },
+                { 'name': 'default-incremental-backup', 'schedule': '0 */4 * * *', 'type': 'incremental' }
+              ]
+            } :null}
+          maintenanceWindow: |-
+            ${input.enable_maintenance ? {
+              'startDay': input.maint_day,
+              'startTime': input.maint_start_time,
+              'duration': input.maint_duration
+            } :null}
+        metadata:
+          name: ${to_lower(input.db_name)}
+  DSM_DB_Config:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - Namespace
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: databases.dataservices.vmware.com/v1alpha1
+        kind: DatabaseConfig
+        spec:
+          params:
+            shared_preload_libraries: pg_stat_statements
+            pg_stat_statements.track: all
+            pg_stat_statements.max: '10000'
+        metadata:
+          name: ${to_lower(input.db_name)}-db-config
+  Secret:
+    type: CCI.Supervisor.Resource
+    dependsOn:
+      - Namespace
+    properties:
+      context: ${resource.Namespace.id}
+      manifest:
+        apiVersion: v1
+        kind: Secret
+        stringData:
+          username: ${input.db_username}
+          password: ${input.db_password}
+        metadata:
+          name: ${to_lower(input.db_name)}-secret
